@@ -832,12 +832,311 @@
     }
   }
 
+  /* ---------- compare overlay (vs design) ---------- */
+
+  var COMPARE_PREFIX = 'matrixQCCompare:';
+  var compareDefaults = {
+    src: '', opacity: 50, blend: 'normal',
+    x: 0, y: 0, width: 0, scale: 100, visible: true, locked: true,
+  };
+  var compare = Object.assign({}, compareDefaults);
+  var compareTooBig = false;
+  var compareDrag = null;
+
+  var compareImg = el('img', { class: 'qc-compare-img', alt: 'Design overlay', draggable: 'false' });
+  var compareCard = el('div', { class: 'qc-compare', 'aria-hidden': 'true' });
+  var compareFileInput = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
+
+  function compareKey() {
+    return COMPARE_PREFIX + cfg.pagePath + ':' + currentViewport();
+  }
+
+  function loadCompareState() {
+    var next = Object.assign({}, compareDefaults);
+    try {
+      var raw = window.localStorage.getItem(compareKey());
+      if (raw) {
+        next = Object.assign(next, JSON.parse(raw));
+      }
+    } catch (e) {}
+    compare = next;
+    compareTooBig = false;
+  }
+
+  function saveCompareState() {
+    try {
+      window.localStorage.setItem(compareKey(), JSON.stringify(compare));
+      compareTooBig = false;
+    } catch (e) {
+      // Large data URLs can blow the localStorage quota: keep the image for this
+      // session but persist the rest of the settings without it.
+      compareTooBig = true;
+      try {
+        window.localStorage.setItem(compareKey(), JSON.stringify(Object.assign({}, compare, { src: '' })));
+      } catch (e2) {}
+    }
+  }
+
+  function applyCompare() {
+    if (!compare.src) {
+      compareImg.style.display = 'none';
+      return;
+    }
+    if (compareImg.getAttribute('src') !== compare.src) {
+      compareImg.src = compare.src;
+    }
+    compareImg.style.display = (state.enabled && compare.visible) ? 'block' : 'none';
+    compareImg.style.width = (compare.width || window.innerWidth) + 'px';
+    compareImg.style.left = compare.x + 'px';
+    compareImg.style.top = compare.y + 'px';
+    compareImg.style.transform = 'scale(' + (compare.scale / 100) + ')';
+    compareImg.style.opacity = String(Math.max(0, Math.min(100, compare.opacity)) / 100);
+    compareImg.style.mixBlendMode = compare.blend === 'difference' ? 'difference' : 'normal';
+    compareImg.style.pointerEvents = compare.locked ? 'none' : 'auto';
+    compareImg.classList.toggle('qc-compare-img--unlocked', !compare.locked);
+  }
+
+  function setCompareSrc(src) {
+    compare.src = src || '';
+    if (compare.src && !compare.width) {
+      compare.width = window.innerWidth;
+    }
+    if (compare.src) {
+      compare.visible = true;
+    }
+    saveCompareState();
+    applyCompare();
+    renderCompareCard();
+  }
+
+  function readFileAsDataUrl(file) {
+    return new Promise(function (resolve, reject) {
+      var fr = new FileReader();
+      fr.onload = function () { resolve(fr.result); };
+      fr.onerror = reject;
+      fr.readAsDataURL(file);
+    });
+  }
+
+  compareFileInput.addEventListener('change', function () {
+    var file = compareFileInput.files && compareFileInput.files[0];
+    if (file) {
+      readFileAsDataUrl(file).then(setCompareSrc);
+    }
+    compareFileInput.value = '';
+  });
+
+  function onCompareDragStart(e) {
+    if (compare.locked || !compare.src) {
+      return;
+    }
+    e.preventDefault();
+    compareDrag = { sx: e.clientX, sy: e.clientY, ox: compare.x, oy: compare.y };
+  }
+
+  function onCompareDragMove(e) {
+    if (!compareDrag) {
+      return;
+    }
+    compare.x = compareDrag.ox + (e.clientX - compareDrag.sx);
+    compare.y = compareDrag.oy + (e.clientY - compareDrag.sy);
+    applyCompare();
+  }
+
+  function onCompareDragEnd() {
+    if (compareDrag) {
+      compareDrag = null;
+      saveCompareState();
+    }
+  }
+
+  function onComparePaste(e) {
+    if (!state.enabled || !compareCard.classList.contains('is-open')) {
+      return;
+    }
+    var items = (e.clipboardData && e.clipboardData.items) || [];
+    for (var i = 0; i < items.length; i++) {
+      if (items[i].type && items[i].type.indexOf('image') === 0) {
+        var file = items[i].getAsFile();
+        if (file) {
+          e.preventDefault();
+          readFileAsDataUrl(file).then(setCompareSrc);
+        }
+        return;
+      }
+    }
+  }
+
+  function onCompareKey(e) {
+    if (!compare.src || compare.locked || !compareCard.classList.contains('is-open')) {
+      return;
+    }
+    var n = (e.target && e.target.nodeName) || '';
+    if (n === 'INPUT' || n === 'TEXTAREA' || n === 'SELECT') {
+      return;
+    }
+    var step = e.shiftKey ? 10 : 1;
+    var moved = true;
+    if (e.key === 'ArrowLeft') { compare.x -= step; }
+    else if (e.key === 'ArrowRight') { compare.x += step; }
+    else if (e.key === 'ArrowUp') { compare.y -= step; }
+    else if (e.key === 'ArrowDown') { compare.y += step; }
+    else { moved = false; }
+    if (moved) {
+      e.preventDefault();
+      applyCompare();
+      saveCompareState();
+    }
+  }
+
+  function compareRow(children) {
+    return el('div', { class: 'qc-compare__row' }, children);
+  }
+
+  function renderCompareCard() {
+    var open = compareCard.classList.contains('is-open');
+    compareCard.innerHTML = '';
+    compareCard.appendChild(el('div', { class: 'qc-panel__head' }, [
+      el('strong', { text: 'Compare vs design' }),
+      el('button', { class: 'qc-x', text: '\u00d7', type: 'button' }),
+    ]));
+
+    var figma = currentViewport() === 'mobile' ? cfg.figmaMobile : cfg.figmaDesktop;
+    var uploadBtn = el('button', { class: 'qc-btn qc-btn--sm qc-btn--primary', text: compare.src ? 'Replace image' : 'Upload image', type: 'button' });
+    var urlInput = el('input', { class: 'qc-input qc-input--sm', type: 'url', placeholder: 'or paste image URL' });
+    var urlBtn = el('button', { class: 'qc-btn qc-btn--sm', text: 'Load', type: 'button' });
+
+    var rows = [
+      compareRow([uploadBtn]),
+      compareRow([urlInput, urlBtn]),
+      el('p', { class: 'qc-meta qc-compare__row', text: 'Tip: copy a frame in Figma (or any image) and press Cmd/Ctrl+V here to drop it in.' }),
+    ];
+    if (figma) {
+      rows.push(compareRow([el('a', { class: 'qc-link', href: figmaViewUrl(figma), target: '_blank', text: 'Open this page\u2019s Figma reference \u2197' })]));
+    }
+    if (compareTooBig) {
+      rows.push(el('p', { class: 'qc-meta qc-compare__warn qc-compare__row', text: 'Image shown for this session only \u2014 too large to remember after reload.' }));
+    }
+
+    if (compare.src) {
+      var opacity = el('input', { class: 'qc-range', type: 'range', min: '0', max: '100', value: String(compare.opacity) });
+      var opacityVal = el('span', { class: 'qc-meta', text: compare.opacity + '%' });
+      opacity.addEventListener('input', function () {
+        compare.opacity = parseInt(opacity.value, 10) || 0;
+        opacityVal.textContent = compare.opacity + '%';
+        applyCompare();
+      });
+      opacity.addEventListener('change', saveCompareState);
+
+      var scale = el('input', { class: 'qc-range', type: 'range', min: '25', max: '200', value: String(compare.scale) });
+      var scaleVal = el('span', { class: 'qc-meta', text: compare.scale + '%' });
+      scale.addEventListener('input', function () {
+        compare.scale = parseInt(scale.value, 10) || 100;
+        scaleVal.textContent = compare.scale + '%';
+        applyCompare();
+      });
+      scale.addEventListener('change', saveCompareState);
+
+      var diff = el('input', { type: 'checkbox' });
+      diff.checked = compare.blend === 'difference';
+      diff.addEventListener('change', function () {
+        compare.blend = diff.checked ? 'difference' : 'normal';
+        applyCompare();
+        saveCompareState();
+      });
+      var diffLabel = el('label', { class: 'qc-compare__check' }, [diff, el('span', { text: ' Difference blend (highlights mismatches)' })]);
+
+      var lockBtn = el('button', { class: 'qc-btn qc-btn--sm', text: compare.locked ? 'Unlock to move' : 'Lock position', type: 'button' });
+      lockBtn.addEventListener('click', function () {
+        compare.locked = !compare.locked;
+        applyCompare();
+        saveCompareState();
+        renderCompareCard();
+      });
+      var visBtn = el('button', { class: 'qc-btn qc-btn--sm', text: compare.visible ? 'Hide overlay' : 'Show overlay', type: 'button' });
+      visBtn.addEventListener('click', function () {
+        compare.visible = !compare.visible;
+        applyCompare();
+        saveCompareState();
+        renderCompareCard();
+      });
+      var fitBtn = el('button', { class: 'qc-btn qc-btn--sm', text: 'Fit width', type: 'button' });
+      fitBtn.addEventListener('click', function () {
+        compare.width = window.innerWidth;
+        compare.x = 0;
+        compare.scale = 100;
+        applyCompare();
+        saveCompareState();
+        renderCompareCard();
+      });
+      var resetBtn = el('button', { class: 'qc-btn qc-btn--sm', text: 'Reset position', type: 'button' });
+      resetBtn.addEventListener('click', function () {
+        compare.x = 0;
+        compare.y = 0;
+        compare.scale = 100;
+        applyCompare();
+        saveCompareState();
+        renderCompareCard();
+      });
+      var clearBtn = el('button', { class: 'qc-btn qc-btn--sm qc-btn--danger', text: 'Remove image', type: 'button' });
+      clearBtn.addEventListener('click', function () {
+        setCompareSrc('');
+      });
+
+      rows.push(el('label', { class: 'qc-label', text: 'Opacity' }));
+      rows.push(compareRow([opacity, opacityVal]));
+      rows.push(el('label', { class: 'qc-label', text: 'Scale' }));
+      rows.push(compareRow([scale, scaleVal]));
+      rows.push(compareRow([diffLabel]));
+      rows.push(compareRow([lockBtn, visBtn]));
+      rows.push(compareRow([fitBtn, resetBtn]));
+      rows.push(compareRow([clearBtn]));
+      rows.push(el('p', { class: 'qc-meta qc-compare__row', text: compare.locked ? 'Locked: clicks pass through to the page.' : 'Unlocked: drag the image, or nudge with arrow keys (Shift = 10px).' }));
+    }
+
+    compareCard.appendChild(el('div', { class: 'qc-compare__body' }, rows));
+
+    uploadBtn.addEventListener('click', function () { compareFileInput.click(); });
+    urlBtn.addEventListener('click', function () {
+      var v = urlInput.value.trim();
+      if (v) { setCompareSrc(v); }
+    });
+    urlInput.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        var v = urlInput.value.trim();
+        if (v) { setCompareSrc(v); }
+      }
+    });
+    compareCard.querySelector('.qc-x').addEventListener('click', closeCompare);
+
+    if (open) {
+      compareCard.classList.add('is-open');
+    }
+  }
+
+  function openCompare() {
+    loadCompareState();
+    applyCompare();
+    renderCompareCard();
+    compareCard.classList.add('is-open');
+    compareCard.setAttribute('aria-hidden', 'false');
+    compareBtn.classList.add('qc-btn--active');
+  }
+
+  function closeCompare() {
+    compareCard.classList.remove('is-open');
+    compareCard.setAttribute('aria-hidden', 'true');
+    compareBtn.classList.remove('qc-btn--active');
+  }
+
   /* ---------- toolbar ---------- */
 
   var pickBtn = el('button', { class: 'qc-btn qc-btn--primary', text: '+ Add snag', type: 'button' });
   var generalBtn = el('button', { class: 'qc-btn', text: '+ General', title: 'Log a page-level snag without picking an element', type: 'button' });
   var listBtn = el('button', { class: 'qc-btn', text: 'List', type: 'button' });
   var pinsBtn = el('button', { class: 'qc-btn', text: 'Hide pins', type: 'button' });
+  var compareBtn = el('button', { class: 'qc-btn', text: 'Compare', title: 'Overlay a design image to compare against the page', type: 'button' });
 
   var toolbar = el('div', { class: 'qc-toolbar' }, [
     el('span', { class: 'qc-brand', text: 'QC' }),
@@ -845,7 +1144,16 @@
     generalBtn,
     listBtn,
     pinsBtn,
+    compareBtn,
   ]);
+
+  compareBtn.addEventListener('click', function () {
+    if (compareCard.classList.contains('is-open')) {
+      closeCompare();
+    } else {
+      openCompare();
+    }
+  });
 
   pickBtn.addEventListener('click', function () {
     setPicking(!state.picking);
@@ -907,12 +1215,15 @@
       } else {
         renderPins();
       }
+      applyCompare();
     } else {
       setPicking(false);
       closeForm();
       closePopover();
       listPanel.classList.remove('is-open');
+      closeCompare();
       renderPins();
+      applyCompare();
     }
   }
 
@@ -923,10 +1234,21 @@
     document.body.appendChild(hoverLabel);
     document.body.appendChild(flashBox);
     document.body.appendChild(pinLayer);
+    document.body.appendChild(compareImg);
+    document.body.appendChild(compareFileInput);
     document.body.appendChild(panel);
     document.body.appendChild(listPanel);
     document.body.appendChild(popover);
+    document.body.appendChild(compareCard);
     document.body.appendChild(toolbar);
+
+    loadCompareState();
+    applyCompare();
+    compareImg.addEventListener('mousedown', onCompareDragStart);
+    document.addEventListener('mousemove', onCompareDragMove);
+    document.addEventListener('mouseup', onCompareDragEnd);
+    document.addEventListener('paste', onComparePaste);
+    document.addEventListener('keydown', onCompareKey);
 
     document.addEventListener('mousemove', onMouseMove);
     document.addEventListener('click', onClickCapture, true);
@@ -939,7 +1261,10 @@
       }
     });
     document.addEventListener('keydown', onKeyDown);
-    window.addEventListener('resize', renderPins);
+    window.addEventListener('resize', function () {
+      renderPins();
+      applyCompare();
+    });
     window.addEventListener('scroll', function () {
       if (state.enabled && state.pinsVisible) {
         renderPins();

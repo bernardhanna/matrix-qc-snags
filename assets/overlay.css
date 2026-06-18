@@ -176,6 +176,89 @@ body.qc-picking * {
 .qc-pin--status-reverted { background: var(--qc-st-reverted); opacity: 0.55; }
 .qc-pin--status-non_issue { background: var(--qc-st-non_issue); opacity: 0.45; }
 
+/* compare overlay */
+.qc-compare-img {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 2147482300;
+  display: none;
+  height: auto;
+  max-width: none;
+  transform-origin: top left;
+  user-select: none;
+  -webkit-user-drag: none;
+  outline: 1px dashed rgba(47, 111, 237, 0.45);
+}
+
+.qc-compare-img--unlocked {
+  outline: 2px dashed var(--qc-accent);
+  cursor: move;
+}
+
+.qc-compare {
+  position: fixed;
+  z-index: 2147483050;
+  bottom: 72px;
+  right: 18px;
+  width: 300px;
+  max-width: 92vw;
+  max-height: 72vh;
+  overflow-y: auto;
+  background: #fff;
+  color: #14181f;
+  border-radius: 10px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.24);
+  display: none;
+  font: 14px/1.5 -apple-system, Segoe UI, Roboto, sans-serif;
+}
+
+.qc-compare.is-open {
+  display: block;
+}
+
+.qc-compare__body {
+  padding: 8px 4px 12px;
+}
+
+.qc-compare__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+}
+
+.qc-compare__row .qc-input--sm {
+  margin-bottom: 0;
+  flex: 1;
+}
+
+.qc-compare__row .qc-btn--sm {
+  flex: 1;
+}
+
+.qc-compare .qc-label {
+  padding: 0 12px;
+  margin: 10px 0 2px;
+}
+
+.qc-compare__check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #5a6473;
+  cursor: pointer;
+}
+
+.qc-compare__warn {
+  color: #b26200;
+}
+
+.qc-range {
+  flex: 1;
+}
+
 .qc-panel,
 .qc-list {
   position: fixed;

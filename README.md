@@ -23,12 +23,14 @@ Your `main` branch is never committed to directly — every fix is a reviewable 
 - **Click-to-pin capture**: CSS selector, viewport, screenshot, element text, and a snapshot of key computed styles.
 - **Tailwind/ACF aware**: captures the block slug (e.g. `partners`) and maps it to the likely template (`template-parts/flexi/partners.php`), plus the element's Tailwind classes. Auto-generated UUID ids are converted to stable `[id^="slug-"]` selectors.
 - **Figma references**: page-level mapping seeded from a CSV, plus an optional per-element Figma node link.
+- **General (page-level) snags**: the **+ General** button logs issues not tied to a specific element (page-wide layout, missing content, broad requests) — these show in the list with no pin.
+- **Compare vs design**: the **Compare** button overlays a design image on top of the live page to check pixel fidelity. Drop in an image by upload, URL, or paste (Cmd/Ctrl+V a copied Figma frame). Adjust **opacity**, toggle **difference blend** to highlight mismatches, **scale**, **fit width**, and **unlock** to drag or nudge with arrow keys. Settings persist per page + viewport.
 - Re-anchoring, status-coloured pins with popovers for edit/comment/locate.
 
 ### Organise
 - **Categories**: Frontend, Functionality, Backend, Content, Asset, Accessibility, Performance, SEO, Other.
 - **Severity + numeric priority** with a prioritised queue.
-- **Statuses**: New, Triaged, Review required, In progress, PR open, Fixed, Reverted, Non-issue.
+- **Statuses**: New, Triaged, Review required, In progress, PR open, Fixed, Reverted, Non-issue — colour-coded in the admin snag list (status/severity pills, row tint, colour-key legend) so the queue reads at a glance.
 - **Comments** per snag, with an editable commenter email.
 - **Dashboard**: cross-page overview, per-page counts, priority queue with inline editing.
 - **Exports**: CSV, a Markdown "Agent brief", and machine-readable JSON.

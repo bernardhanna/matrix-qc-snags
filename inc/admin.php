@@ -51,14 +51,14 @@ function matrix_qc_snag_render_column($column, $post_id) {
             echo esc_html(matrix_qc_snag_type_label(get_post_meta($post_id, '_qc_type', true)));
             break;
         case 'qc_sev':
-            echo esc_html(get_post_meta($post_id, '_qc_severity', true));
+            echo matrix_qc_snag_severity_pill(get_post_meta($post_id, '_qc_severity', true)); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
             break;
         case 'qc_prio':
             $prio = absint(get_post_meta($post_id, '_qc_priority', true));
             echo $prio ? 'P' . esc_html($prio) : '&mdash;';
             break;
         case 'qc_status':
-            echo esc_html(matrix_qc_snag_status_label(get_post_meta($post_id, '_qc_status', true)));
+            echo matrix_qc_snag_status_pill(get_post_meta($post_id, '_qc_status', true)); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
             break;
         case 'qc_figma':
             $figma = get_post_meta($post_id, '_qc_figma_node', true);
@@ -71,6 +71,128 @@ function matrix_qc_snag_render_column($column, $post_id) {
     }
 }
 add_action('manage_' . MATRIX_QC_SNAG_CPT . '_posts_custom_column', 'matrix_qc_snag_render_column', 10, 2);
+
+/**
+ * Colour scheme for each snag status (foreground, light background, border/accent).
+ *
+ * @param string $status
+ * @return array{fg:string,bg:string,bd:string}
+ */
+function matrix_qc_snag_status_colors($status) {
+    $map = array(
+        'new'             => array('fg' => '#8a1f11', 'bg' => '#fcebea', 'bd' => '#d63638'),
+        'triaged'         => array('fg' => '#7a4100', 'bg' => '#fcf3e6', 'bd' => '#dba617'),
+        'review_required' => array('fg' => '#5a2ca0', 'bg' => '#f3eefb', 'bd' => '#7c3aed'),
+        'in_progress'     => array('fg' => '#0a4b78', 'bg' => '#e7f1f8', 'bd' => '#2271b1'),
+        'pr_open'         => array('fg' => '#0a5566', 'bg' => '#e6f4f9', 'bd' => '#007cba'),
+        'fixed'           => array('fg' => '#0a5a2f', 'bg' => '#e8f6ee', 'bd' => '#1d6b3f'),
+        'reverted'        => array('fg' => '#7a4100', 'bg' => '#fcf3e6', 'bd' => '#b26200'),
+        'non_issue'       => array('fg' => '#50575e', 'bg' => '#f0f0f1', 'bd' => '#8c8f94'),
+    );
+    return isset($map[$status]) ? $map[$status] : $map['new'];
+}
+
+/**
+ * Colour scheme for each severity level.
+ *
+ * @param string $severity
+ * @return array{fg:string,bg:string,bd:string}
+ */
+function matrix_qc_snag_severity_colors($severity) {
+    $map = array(
+        'high'   => array('fg' => '#8a1f11', 'bg' => '#fcebea', 'bd' => '#d63638'),
+        'medium' => array('fg' => '#7a4100', 'bg' => '#fcf3e6', 'bd' => '#dba617'),
+        'low'    => array('fg' => '#50575e', 'bg' => '#f0f0f1', 'bd' => '#8c8f94'),
+    );
+    return isset($map[$severity]) ? $map[$severity] : $map['low'];
+}
+
+/**
+ * Render a coloured status pill (also carries a data attribute used to tint the row).
+ *
+ * @param string $status
+ * @return string
+ */
+function matrix_qc_snag_status_pill($status) {
+    $status = $status !== '' ? $status : 'new';
+    $c      = matrix_qc_snag_status_colors($status);
+    return sprintf(
+        '<span class="qc-pill" data-qc-status="%s" style="background:%s;color:%s;border-color:%s">%s</span>',
+        esc_attr($status),
+        esc_attr($c['bg']),
+        esc_attr($c['fg']),
+        esc_attr($c['bd']),
+        esc_html(matrix_qc_snag_status_label($status))
+    );
+}
+
+/**
+ * Render a coloured severity pill.
+ *
+ * @param string $severity
+ * @return string
+ */
+function matrix_qc_snag_severity_pill($severity) {
+    if ($severity === '') {
+        return '&mdash;';
+    }
+    $c = matrix_qc_snag_severity_colors($severity);
+    return sprintf(
+        '<span class="qc-pill" style="background:%s;color:%s;border-color:%s">%s</span>',
+        esc_attr($c['bg']),
+        esc_attr($c['fg']),
+        esc_attr($c['bd']),
+        esc_html(ucfirst($severity))
+    );
+}
+
+/**
+ * Styles + row tinting for the snag list screen.
+ */
+function matrix_qc_snag_list_assets() {
+    $screen = get_current_screen();
+    if (!$screen || $screen->id !== 'edit-' . MATRIX_QC_SNAG_CPT) {
+        return;
+    }
+
+    echo '<style>';
+    echo '.qc-pill{display:inline-block;padding:1px 9px;border-radius:999px;font-size:11px;font-weight:600;line-height:1.7;border:1px solid transparent;white-space:nowrap}';
+    foreach (array('new', 'triaged', 'review_required', 'in_progress', 'pr_open', 'fixed', 'reverted', 'non_issue') as $status) {
+        $c = matrix_qc_snag_status_colors($status);
+        printf(
+            '.wp-list-table tr.qc-row-%1$s td.column-qc_status{box-shadow:inset 4px 0 0 %2$s}.wp-list-table tr.qc-row-%1$s{background:%3$s}',
+            esc_attr($status),
+            esc_attr($c['bd']),
+            esc_attr($c['bg'] . '80')
+        );
+    }
+    echo '.wp-list-table tr.qc-row-fixed td.column-title a.row-title,.wp-list-table tr.qc-row-non_issue td.column-title a.row-title{text-decoration:line-through;opacity:.75}';
+    echo '</style>';
+
+    echo '<script>';
+    echo '(function(){document.querySelectorAll(".wp-list-table tbody tr").forEach(function(tr){';
+    echo 'var p=tr.querySelector(".qc-pill[data-qc-status]");if(p){tr.classList.add("qc-row-"+p.getAttribute("data-qc-status"));}});})();';
+    echo '</script>';
+}
+add_action('admin_footer-edit.php', 'matrix_qc_snag_list_assets');
+
+/**
+ * Colour-key legend shown above the snag list table.
+ */
+function matrix_qc_snag_list_legend() {
+    $screen = get_current_screen();
+    if (!$screen || $screen->id !== 'edit-' . MATRIX_QC_SNAG_CPT) {
+        return;
+    }
+    echo '<div class="qc-legend-bar" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:10px 0;padding:8px 10px;background:#fff;border:1px solid #dcdcde;border-radius:6px">';
+    echo '<strong style="font-size:12px">Status key:</strong>';
+    $enums = matrix_qc_snag_enums();
+    foreach ($enums['status'] as $status) {
+        echo matrix_qc_snag_status_pill($status); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+    }
+    echo '</div>';
+}
+add_action('admin_notices', 'matrix_qc_snag_list_legend');
 
 /**
  * Make the priority column sortable.

@@ -28,6 +28,7 @@
     loaded: false,
     picking: false,
     selected: null,
+    general: false,
     snags: [],
     pinsVisible: true,
   };
@@ -372,6 +373,7 @@
       },
     };
     setPicking(false);
+    state.general = false;
     openForm();
   }
 
@@ -402,14 +404,22 @@
     var viewport = currentViewport();
     var figma = viewport === 'mobile' ? cfg.figmaMobile : cfg.figmaDesktop;
 
+    var general = state.general;
+
     panel.innerHTML = '';
     panel.appendChild(el('div', { class: 'qc-panel__head' }, [
-      el('strong', { text: 'New snag' }),
+      el('strong', { text: general ? 'New general snag' : 'New snag' }),
       el('button', { class: 'qc-x', text: '\u00d7', type: 'button' }),
     ]));
 
     var titleInput = el('input', { class: 'qc-input', type: 'text', placeholder: 'Optional short title' });
-    var desc = el('textarea', { class: 'qc-input', rows: '4', placeholder: 'Describe the snag (what is wrong vs the design)...' });
+    var desc = el('textarea', {
+      class: 'qc-input',
+      rows: '4',
+      placeholder: general
+        ? 'Describe the issue (page-wide layout, missing content, a general request)...'
+        : 'Describe the snag (what is wrong vs the design)...',
+    });
     var type = el('select', { class: 'qc-input' });
     cfg.enums.type.forEach(function (t) {
       type.appendChild(el('option', { value: t, text: typeLabel(t) }));
@@ -442,10 +452,13 @@
         ? el('button', { class: 'qc-linkbtn', type: 'button', text: 'Use page Figma reference' })
         : null,
       el('p', { class: 'qc-meta', html: 'Viewport: <b>' + viewport + '</b> (' + window.innerWidth + 'px)' }),
-      sel && sel.component ? el('p', { class: 'qc-meta', html: 'Block: <b>' + sel.component + '</b>' }) : null,
-      el('p', { class: 'qc-meta', text: 'Element: ' + (sel ? sel.selector : 'n/a') }),
-      sel && sel.classes ? el('p', { class: 'qc-meta', text: 'Classes: ' + sel.classes.slice(0, 120) }) : null,
-      sel && sel.element_text ? el('p', { class: 'qc-meta', text: 'Text: \u201c' + sel.element_text.slice(0, 80) + '\u201d' }) : null,
+      general
+        ? el('p', { class: 'qc-meta', text: 'Scope: page-level \u2014 not tied to a specific element. Shows in the List (no pin).' })
+        : null,
+      !general && sel && sel.component ? el('p', { class: 'qc-meta', html: 'Block: <b>' + sel.component + '</b>' }) : null,
+      !general ? el('p', { class: 'qc-meta', text: 'Element: ' + (sel ? sel.selector : 'n/a') }) : null,
+      !general && sel && sel.classes ? el('p', { class: 'qc-meta', text: 'Classes: ' + sel.classes.slice(0, 120) }) : null,
+      !general && sel && sel.element_text ? el('p', { class: 'qc-meta', text: 'Text: \u201c' + sel.element_text.slice(0, 80) + '\u201d' }) : null,
     ]));
 
     var usePageBtn = panel.querySelector('.qc-linkbtn');
@@ -478,10 +491,11 @@
     panel.classList.remove('is-open');
     panel.setAttribute('aria-hidden', 'true');
     state.selected = null;
+    state.general = false;
   }
 
   function submitSnag(sel, description, type, severity, viewport, figma, figmaElement, customTitle, status, save) {
-    captureScreenshot(sel ? sel.node : document.body)
+    captureScreenshot(sel ? sel.node : null)
       .then(function (dataUrl) {
         if (!dataUrl) {
           return { id: 0 };
@@ -821,18 +835,26 @@
   /* ---------- toolbar ---------- */
 
   var pickBtn = el('button', { class: 'qc-btn qc-btn--primary', text: '+ Add snag', type: 'button' });
+  var generalBtn = el('button', { class: 'qc-btn', text: '+ General', title: 'Log a page-level snag without picking an element', type: 'button' });
   var listBtn = el('button', { class: 'qc-btn', text: 'List', type: 'button' });
   var pinsBtn = el('button', { class: 'qc-btn', text: 'Hide pins', type: 'button' });
 
   var toolbar = el('div', { class: 'qc-toolbar' }, [
     el('span', { class: 'qc-brand', text: 'QC' }),
     pickBtn,
+    generalBtn,
     listBtn,
     pinsBtn,
   ]);
 
   pickBtn.addEventListener('click', function () {
     setPicking(!state.picking);
+  });
+  generalBtn.addEventListener('click', function () {
+    setPicking(false);
+    state.selected = null;
+    state.general = true;
+    openForm();
   });
   listBtn.addEventListener('click', function () {
     renderList();

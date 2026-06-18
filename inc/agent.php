@@ -83,12 +83,28 @@ function matrix_qc_agent_detect_repo() {
  */
 function matrix_qc_agent_config() {
     return array(
-        'api_key' => (string) get_option('matrix_qc_agent_api_key', ''),
-        'repo'    => (string) get_option('matrix_qc_agent_repo', matrix_qc_agent_detect_repo()),
-        'ref'     => (string) get_option('matrix_qc_agent_ref', 'main'),
-        'model'   => (string) get_option('matrix_qc_agent_model', ''),
-        'auto_pr' => get_option('matrix_qc_agent_autopr', '1') === '1',
+        'api_key'   => (string) get_option('matrix_qc_agent_api_key', ''),
+        'repo'      => (string) get_option('matrix_qc_agent_repo', matrix_qc_agent_detect_repo()),
+        'ref'       => (string) get_option('matrix_qc_agent_ref', 'main'),
+        'model'     => (string) get_option('matrix_qc_agent_model', ''),
+        'auto_pr'   => get_option('matrix_qc_agent_autopr', '1') === '1',
+        'site_user' => (string) get_option('matrix_qc_agent_site_user', 'matrix'),
+        'site_pass' => (string) get_option('matrix_qc_agent_site_pass', (string) gmdate('Y')),
     );
+}
+
+/**
+ * A note about staging HTTP basic auth, for inclusion in agent prompts.
+ *
+ * @return string
+ */
+function matrix_qc_agent_site_note() {
+    $cfg = matrix_qc_agent_config();
+    if ($cfg['site_user'] === '' && $cfg['site_pass'] === '') {
+        return '';
+    }
+    return 'If you load the live staging site (' . home_url('/') . ') and it is password protected, use HTTP basic auth username "'
+        . $cfg['site_user'] . '" and password "' . $cfg['site_pass'] . '".';
 }
 
 /**
@@ -111,6 +127,11 @@ function matrix_qc_agent_create($prompt) {
     $cfg = matrix_qc_agent_config();
     if ($cfg['api_key'] === '') {
         return new WP_Error('no_key', 'Set the Cursor API key in QC Snags > Agent.');
+    }
+
+    $note = matrix_qc_agent_site_note();
+    if ($note !== '') {
+        $prompt .= "\n\n" . $note;
     }
 
     $body = array(
@@ -453,8 +474,12 @@ function matrix_qc_agent_poll() {
         $pr = matrix_qc_agent_extract_pr($info);
         if ($pr !== '') {
             foreach ($ids as $sid) {
+                $prev = (string) get_post_meta($sid, '_qc_pr_url', true);
                 update_post_meta($sid, '_qc_pr_url', $pr);
                 update_post_meta($sid, '_qc_status', 'pr_open');
+                if ($prev !== $pr) {
+                    matrix_qc_snag_add_system_comment($sid, 'Pull request opened: ' . $pr);
+                }
             }
         }
     }
@@ -504,6 +529,56 @@ function matrix_qc_agent_handle_dispatch() {
 add_action('admin_post_matrix_qc_agent_dispatch', 'matrix_qc_agent_handle_dispatch');
 
 /**
+ * Ask the agent to open a PR that reverts a previously merged/opened fix PR.
+ *
+ * @param int $snag_id
+ * @return array<string,mixed>|WP_Error
+ */
+function matrix_qc_agent_revert_pr($snag_id) {
+    $post = get_post($snag_id);
+    if (!$post || $post->post_type !== MATRIX_QC_SNAG_CPT) {
+        return new WP_Error('not_found', 'Snag not found');
+    }
+    $pr = (string) get_post_meta($snag_id, '_qc_pr_url', true);
+    if ($pr === '') {
+        return new WP_Error('no_pr', 'No PR is recorded for this snag.');
+    }
+    $snag   = matrix_qc_snag_to_array($post);
+    $prompt = "Revert the code change made for this QC snag. Open a NEW pull request that cleanly reverts the changes from this PR: " . $pr
+        . " (revert the merge/commits; do not reintroduce the snag). Keep the revert minimal.\n\nOriginal snag context:\n"
+        . matrix_qc_agent_prompt_single($snag);
+
+    $res = matrix_qc_agent_create($prompt);
+    if (is_wp_error($res)) {
+        return $res;
+    }
+    $agent = matrix_qc_agent_obj($res);
+    update_post_meta($snag_id, '_qc_agent_id', isset($agent['id']) ? (string) $agent['id'] : '');
+    update_post_meta($snag_id, '_qc_agent_url', matrix_qc_agent_url($agent));
+    update_post_meta($snag_id, '_qc_status', 'in_progress');
+    matrix_qc_snag_add_system_comment($snag_id, 'Requested an agent revert PR for ' . $pr . '.');
+    matrix_qc_agent_ensure_cron();
+    return $res;
+}
+
+/**
+ * admin-post: request an agent revert PR.
+ */
+function matrix_qc_agent_handle_revert_pr() {
+    if (!current_user_can(MATRIX_QC_SNAG_CAP)) {
+        wp_die('Forbidden');
+    }
+    check_admin_referer('matrix_qc_agent_dispatch');
+    $id  = isset($_GET['snag']) ? absint($_GET['snag']) : 0;
+    $res = matrix_qc_agent_revert_pr($id);
+    matrix_qc_agent_redirect_with_notice(
+        get_edit_post_link($id, 'url'),
+        is_wp_error($res) ? 'Revert request failed: ' . $res->get_error_message() : 'Requested an agent revert PR.'
+    );
+}
+add_action('admin_post_matrix_qc_agent_revert_pr', 'matrix_qc_agent_handle_revert_pr');
+
+/**
  * admin-post: check a single snag's agent status now.
  */
 function matrix_qc_agent_handle_check() {
@@ -526,8 +601,12 @@ function matrix_qc_agent_handle_check() {
     $agent_status = isset($info['status']) ? (string) $info['status'] : 'unknown';
     $pr           = matrix_qc_agent_extract_pr($info);
     if ($pr !== '') {
+        $prev = (string) get_post_meta($id, '_qc_pr_url', true);
         update_post_meta($id, '_qc_pr_url', $pr);
         update_post_meta($id, '_qc_status', 'pr_open');
+        if ($prev !== $pr) {
+            matrix_qc_snag_add_system_comment($id, 'Pull request opened: ' . $pr);
+        }
         matrix_qc_agent_redirect_with_notice(get_edit_post_link($id, 'url'), 'Agent ' . $agent_status . '. PR opened: ' . $pr);
     }
 
@@ -829,6 +908,8 @@ function matrix_qc_agent_settings_page() {
         update_option('matrix_qc_agent_ref', sanitize_text_field(wp_unslash($_POST['matrix_qc_agent_ref'] ?? 'main')));
         update_option('matrix_qc_agent_model', sanitize_text_field(wp_unslash($_POST['matrix_qc_agent_model'] ?? '')));
         update_option('matrix_qc_agent_autopr', isset($_POST['matrix_qc_agent_autopr']) ? '1' : '0');
+        update_option('matrix_qc_agent_site_user', sanitize_text_field(wp_unslash($_POST['matrix_qc_agent_site_user'] ?? '')));
+        update_option('matrix_qc_agent_site_pass', sanitize_text_field(wp_unslash($_POST['matrix_qc_agent_site_pass'] ?? '')));
         echo '<div class="notice notice-success"><p>Settings saved.</p></div>';
     }
 
@@ -933,6 +1014,14 @@ function matrix_qc_agent_settings_page() {
     printf(
         '<tr><th><label>Auto-create PR</label></th><td><label><input type="checkbox" name="matrix_qc_agent_autopr" %s /> Have the agent open a pull request automatically</label><p class="description">Each dispatch works on a new <code>cursor/&hellip;</code> branch off the base branch and opens a PR &mdash; your base branch is never committed to directly.</p></td></tr>',
         checked($cfg['auto_pr'], true, false)
+    );
+    printf(
+        '<tr><th><label>Staging auth user</label></th><td><input type="text" name="matrix_qc_agent_site_user" value="%s" class="regular-text" /><p class="description">If the staging site is behind HTTP basic auth, this is passed to the agent so it can load pages. Leave blank if not protected.</p></td></tr>',
+        esc_attr($cfg['site_user'])
+    );
+    printf(
+        '<tr><th><label>Staging auth password</label></th><td><input type="text" name="matrix_qc_agent_site_pass" value="%s" class="regular-text" /><p class="description">Defaults to the current year.</p></td></tr>',
+        esc_attr($cfg['site_pass'])
     );
 
     echo '</tbody></table>';

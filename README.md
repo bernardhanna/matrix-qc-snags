@@ -33,6 +33,11 @@ Your `main` branch is never committed to directly — every fix is a reviewable 
 - **Dashboard**: cross-page overview, per-page counts, priority queue with inline editing.
 - **Exports**: CSV, a Markdown "Agent brief", and machine-readable JSON.
 
+### Fix
+- **Content auto-fixer (no git)** — for text snags, edit the page directly in WordPress: the plugin matches the captured element text and replaces it across the target post's content and ACF fields, storing a before snapshot for **one-click revert**.
+- **Code fixes via agent** — see below. A **Revert via agent** button asks the agent to open a clean revert PR for a previous fix.
+- **Auto comment** — when a PR is detected it's posted back as a comment on the snag.
+
 ### Agent bridge (Cursor Cloud Agents API)
 - **Send to agent** from the snag edit screen, a list **row action**, or **bulk actions**:
   - *Send to agent (one PR each)* — separate PR per snag.
@@ -79,6 +84,7 @@ In WordPress: **QC Snags → Agent**.
 | **Base branch / ref** | `main` |
 | **Model** | Choose from the live dropdown, or leave **(account default)**. |
 | **Auto-create PR** | Leave **on**. |
+| **Staging auth user / password** | If staging is behind HTTP basic auth, set these so the agent can load pages. Defaults to `matrix` / current year. |
 
 Then:
 - Click **Save settings**.
@@ -110,11 +116,13 @@ The plugin is project-agnostic — drop it into any WordPress site:
 1. Open any front-end page and click **QC Mode** in the admin toolbar.
 2. Click an element, fill in the snag (title, category, severity, optional Figma link), save.
 3. Triage on **QC Snags → Dashboard** (set priority, status).
-4. Dispatch:
-   - One snag: edit screen or the **Send to agent** row action.
-   - Several: select snags → **Bulk actions → Send to agent (one PR each / one combined PR)**.
-   - Everything open: **Dashboard → Dispatch open to agent**.
-5. Click **View live agent run** to watch, or **Check now** to poll. When the PR is detected the snag flips to **PR open** with the PR link.
+4. Fix it one of two ways:
+   - **Content (text) fix — no git:** on the snag, type the replacement in **Content fix**, Save, then **Apply content fix**. Undo any time with **Revert content fix**.
+   - **Code/design fix — via agent:** dispatch to the Cursor agent:
+     - One snag: edit screen or the **Send to agent** row action.
+     - Several: select snags → **Bulk actions → Send to agent (one PR each / one combined PR)**.
+     - Everything open: **Dashboard → Dispatch open to agent**.
+5. For agent fixes, click **View live agent run** to watch, or **Check now** to poll. When the PR is detected the snag flips to **PR open**, the link is posted as a comment, and you can **Revert via agent** if needed.
 6. Review and merge the PR. Merge deploys to staging.
 
 ---
@@ -141,7 +149,8 @@ inc/figma-map.php    Page -> Figma map, URL parsing, agent instruction
 inc/rest.php         REST API (snags, status, comments, screenshot)
 inc/admin.php        List columns, detail metabox, dashboard, exports
 inc/overlay.php      Front-end enqueue + admin-bar toggle
-inc/agent.php        Cursor Cloud Agents bridge (settings, dispatch, poll, diagnostics)
+inc/agent.php        Cursor Cloud Agents bridge (settings, dispatch, poll, diagnostics, CI install)
+inc/content-fix.php  Direct content fixer (apply/revert via WP, no git) + system comments
 assets/overlay.js    Overlay UI (capture, pins, popover, comments)
 assets/overlay.css   Overlay styles
 ```
@@ -160,6 +169,6 @@ CI gate (in the theme repo): `.github/workflows/qc-pr.yml`.
 
 ## Roadmap
 
-- **Done** — Phase 1 (capture + dashboard + exports), Phase 3 (agent bridge + CI gate).
-- **Next** — Phase 2: content auto-fixer (apply low-risk content snags via the WP REST API with before/after revert); per-snag PR revert; auto-post the PR link back as a snag comment.
+- **Done** — Phase 1 (capture + dashboard + exports), Phase 2 (content auto-fixer with revert, per-snag PR revert, auto PR comment), Phase 3 (agent bridge + CI gate).
+- **Ideas** — diff preview before applying a content fix; richer field targeting (specific ACF field vs whole-page text match); merge-status sync from GitHub.
 ```

@@ -230,6 +230,11 @@ function matrix_qc_snag_render_metabox($post) {
             }
             if ($data['pr_url']) {
                 echo '<p style="margin:0 0 8px">PR: <a href="' . esc_url($data['pr_url']) . '" target="_blank">' . esc_html($data['pr_url']) . '</a></p>';
+                $revert_pr_url = wp_nonce_url(
+                    admin_url('admin-post.php?action=matrix_qc_agent_revert_pr&snag=' . $post->ID),
+                    'matrix_qc_agent_dispatch'
+                );
+                echo '<p style="margin:0 0 8px"><a class="button" href="' . esc_url($revert_pr_url) . '" onclick="return confirm(\'Ask the agent to open a PR reverting this fix?\')">Revert via agent (revert PR)</a></p>';
             } else {
                 echo '<p style="margin:0 0 8px" class="description">No PR yet &mdash; the agent is still working, or hasn\'t pushed. Use &ldquo;Check now&rdquo;.</p>';
             }
@@ -245,6 +250,33 @@ function matrix_qc_snag_render_metabox($post) {
         }
         echo '</td></tr>';
     }
+
+    echo '<tr><th>Content fix</th><td>';
+    echo '<p class="description" style="margin:0 0 6px">Directly edit this page\'s text in WordPress (no code/PR). Matches the captured element text and replaces it everywhere on the target page, with one-click revert.</p>';
+    $fix_default = $data['fix_text'] !== '' ? $data['fix_text'] : $data['element_text'];
+    printf(
+        '<textarea name="matrix_qc_snag_fix_text" rows="2" class="large-text" placeholder="Replacement text">%s</textarea>',
+        esc_textarea($fix_default)
+    );
+    $has_revert = $data['revert_payload'] !== '';
+    if ($data['element_text'] === '') {
+        echo '<p class="description">No element text was captured for this snag, so a direct content fix isn\'t available. Use the agent instead.</p>';
+    } else {
+        $apply_url = wp_nonce_url(
+            admin_url('admin-post.php?action=matrix_qc_content_apply&snag=' . $post->ID),
+            'matrix_qc_content_fix'
+        );
+        echo '<p style="margin:8px 0 0"><a class="button button-primary" href="' . esc_url($apply_url) . '">Apply content fix</a> ';
+        echo '<span class="description">Save the snag first to store your replacement, then Apply.</span></p>';
+    }
+    if ($has_revert) {
+        $revert_url = wp_nonce_url(
+            admin_url('admin-post.php?action=matrix_qc_content_revert&snag=' . $post->ID),
+            'matrix_qc_content_fix'
+        );
+        echo '<p style="margin:8px 0 0"><a class="button" href="' . esc_url($revert_url) . '" onclick="return confirm(\'Revert the content to its previous values?\')">Revert content fix</a></p>';
+    }
+    echo '</td></tr>';
 
     if ($data['screenshot_url']) {
         echo '<tr><th>Screenshot</th><td><img src="' . esc_url($data['screenshot_url']) . '" style="max-width:100%;height:auto;border:1px solid #ddd" /></td></tr>';
@@ -330,6 +362,10 @@ function matrix_qc_snag_save_metabox($post_id) {
 
     if (isset($_POST['matrix_qc_snag_priority'])) {
         update_post_meta($post_id, '_qc_priority', absint(wp_unslash($_POST['matrix_qc_snag_priority'])));
+    }
+
+    if (isset($_POST['matrix_qc_snag_fix_text'])) {
+        update_post_meta($post_id, '_qc_fix_text', sanitize_textarea_field(wp_unslash($_POST['matrix_qc_snag_fix_text'])));
     }
 }
 add_action('save_post_' . MATRIX_QC_SNAG_CPT, 'matrix_qc_snag_save_metabox');

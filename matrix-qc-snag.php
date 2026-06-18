@@ -23,6 +23,7 @@ require_once MATRIX_QC_SNAG_DIR . 'inc/rest.php';
 require_once MATRIX_QC_SNAG_DIR . 'inc/admin.php';
 require_once MATRIX_QC_SNAG_DIR . 'inc/overlay.php';
 require_once MATRIX_QC_SNAG_DIR . 'inc/agent.php';
+require_once MATRIX_QC_SNAG_DIR . 'inc/content-fix.php';
 
 /**
  * Grant the QC capability to administrators and editors on activation,

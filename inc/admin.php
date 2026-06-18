@@ -345,6 +345,205 @@ function matrix_qc_snag_is_open($status) {
 }
 
 /**
+ * Comparator: priority (set first, ascending), then severity, then date.
+ *
+ * @param array<string,mixed> $a
+ * @param array<string,mixed> $b
+ * @return int
+ */
+function matrix_qc_snag_priority_cmp($a, $b) {
+    $pa = absint($a['priority']);
+    $pb = absint($b['priority']);
+    $ha = $pa > 0 ? 0 : 1;
+    $hb = $pb > 0 ? 0 : 1;
+    if ($ha !== $hb) {
+        return $ha - $hb;
+    }
+    if ($pa !== $pb && $pa > 0 && $pb > 0) {
+        return $pa - $pb;
+    }
+    $sa = matrix_qc_snag_severity_weight($a['severity']);
+    $sb = matrix_qc_snag_severity_weight($b['severity']);
+    if ($sa !== $sb) {
+        return $sb - $sa;
+    }
+    return strcmp($a['created'], $b['created']);
+}
+
+/**
+ * Fetch snags as arrays, optionally only open ones, sorted by priority.
+ *
+ * @param bool $only_open
+ * @return array<int,array<string,mixed>>
+ */
+function matrix_qc_snag_fetch_sorted($only_open = true) {
+    $query = new WP_Query(array(
+        'post_type'      => MATRIX_QC_SNAG_CPT,
+        'post_status'    => 'publish',
+        'posts_per_page' => -1,
+        'no_found_rows'  => true,
+    ));
+    $snags = array_map('matrix_qc_snag_to_array', $query->posts);
+
+    if ($only_open) {
+        $snags = array_filter($snags, static function ($s) {
+            return matrix_qc_snag_is_open($s['status'] !== '' ? $s['status'] : 'new');
+        });
+    }
+    usort($snags, 'matrix_qc_snag_priority_cmp');
+
+    return array_values($snags);
+}
+
+/**
+ * Comments for a snag as plain strings.
+ *
+ * @param int $post_id
+ * @return string[]
+ */
+function matrix_qc_snag_comment_strings($post_id) {
+    $comments = get_comments(array(
+        'post_id' => $post_id,
+        'type'    => 'qc_comment',
+        'status'  => 'approve',
+        'orderby' => 'comment_date',
+        'order'   => 'ASC',
+    ));
+    return array_map(static function ($c) {
+        return $c->comment_author . ' (' . $c->comment_author_email . '): ' . $c->comment_content;
+    }, $comments);
+}
+
+/**
+ * Build a Markdown "agent brief" for a set of snags.
+ *
+ * @param array<int,array<string,mixed>> $snags
+ * @return string
+ */
+function matrix_qc_snag_build_brief($snags) {
+    $out   = array();
+    $out[] = '# QC Snags - Agent Brief';
+    $out[] = '';
+    $out[] = 'Site: ' . home_url('/');
+    $out[] = 'Generated: ' . gmdate('Y-m-d H:i') . ' UTC';
+    $out[] = 'Open snags: ' . count($snags);
+    $out[] = '';
+    $out[] = '## How to use this brief';
+    $out[] = '';
+    $out[] = 'Each snag below is a single fix. For each one: open the likely template, locate the element using its Tailwind classes / selector, and implement the change to match the Figma reference and the description. Group edits by template where possible. Snags in the "Content" category are WordPress content edits (not code). Work in priority order (P1 first).';
+    $out[] = '';
+
+    $i = 0;
+    foreach ($snags as $s) {
+        $i++;
+        $label = $s['priority'] > 0 ? 'P' . absint($s['priority']) : 'P-';
+        $heading = $s['title'] !== '' && strpos($s['title'], '[') !== 0
+            ? $s['title']
+            : wp_trim_words($s['description'], 10, '...');
+        $out[] = '---';
+        $out[] = '';
+        $out[] = sprintf(
+            '### %d. [%s][%s][%s] %s (snag #%d)',
+            $i,
+            $label,
+            $s['severity'],
+            matrix_qc_snag_type_label($s['type']),
+            $heading,
+            $s['id']
+        );
+        $out[] = '';
+        $out[] = '- Status: ' . matrix_qc_snag_status_label($s['status']);
+        $out[] = '- Page: ' . $s['page_url'];
+        if ($s['component'] !== '') {
+            $out[] = '- Block: ' . $s['component'] . ' (likely template: `' . matrix_qc_snag_template_hint($s['component']) . '`)';
+        }
+        $out[] = '- Selector: `' . $s['selector'] . '`';
+        if ($s['classes'] !== '') {
+            $out[] = '- Classes: `' . $s['classes'] . '`';
+        }
+        $figma = $s['figma_element'] !== '' ? $s['figma_element'] : $s['figma_node'];
+        if ($figma !== '') {
+            $out[] = '- Figma: ' . matrix_qc_snag_figma_view_url($figma);
+        }
+        $out[] = '- Viewport: ' . $s['viewport'];
+        if ($s['element_text'] !== '') {
+            $out[] = '- Element text: "' . $s['element_text'] . '"';
+        }
+        $out[] = '';
+        $out[] = '**Snag:** ' . $s['description'];
+        $comments = matrix_qc_snag_comment_strings($s['id']);
+        if (!empty($comments)) {
+            $out[] = '';
+            $out[] = '**Comments:**';
+            foreach ($comments as $c) {
+                $out[] = '- ' . $c;
+            }
+        }
+        if ($s['screenshot_url'] !== '') {
+            $out[] = '';
+            $out[] = 'Screenshot: ' . $s['screenshot_url'];
+        }
+        $out[] = '';
+    }
+
+    return implode("\n", $out);
+}
+
+/**
+ * Download an agent brief (Markdown) of open snags.
+ */
+function matrix_qc_snag_export_brief() {
+    if (!current_user_can(MATRIX_QC_SNAG_CAP)) {
+        wp_die('Forbidden');
+    }
+    check_admin_referer('matrix_qc_export');
+
+    $only_open = !isset($_GET['all']);
+    $snags     = matrix_qc_snag_fetch_sorted($only_open);
+    $brief     = matrix_qc_snag_build_brief($snags);
+
+    nocache_headers();
+    header('Content-Type: text/markdown; charset=utf-8');
+    header('Content-Disposition: attachment; filename=qc-agent-brief-' . gmdate('Ymd-His') . '.md');
+    echo $brief; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+    exit;
+}
+add_action('admin_post_matrix_qc_brief', 'matrix_qc_snag_export_brief');
+
+/**
+ * Download a JSON export of snags (machine-readable for an automated agent).
+ */
+function matrix_qc_snag_export_json() {
+    if (!current_user_can(MATRIX_QC_SNAG_CAP)) {
+        wp_die('Forbidden');
+    }
+    check_admin_referer('matrix_qc_export');
+
+    $only_open = !isset($_GET['all']);
+    $snags     = matrix_qc_snag_fetch_sorted($only_open);
+
+    $payload = array(
+        'site'      => home_url('/'),
+        'generated' => gmdate('c'),
+        'count'     => count($snags),
+        'snags'     => array_map(static function ($s) {
+            $s['template_hint'] = $s['component'] !== '' ? matrix_qc_snag_template_hint($s['component']) : '';
+            $s['figma_view']    = matrix_qc_snag_figma_view_url($s['figma_element'] !== '' ? $s['figma_element'] : $s['figma_node']);
+            $s['comments']      = matrix_qc_snag_comment_strings($s['id']);
+            unset($s['screenshot_id']);
+            return $s;
+        }, $snags),
+    );
+
+    nocache_headers();
+    header('Content-Type: application/json; charset=utf-8');
+    header('Content-Disposition: attachment; filename=qc-snags-' . gmdate('Ymd-His') . '.json');
+    echo wp_json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    exit;
+}
+add_action('admin_post_matrix_qc_json', 'matrix_qc_snag_export_json');
+
+/**
  * QC Dashboard: overview of all snags across all pages + prioritised list.
  */
 function matrix_qc_snag_dashboard_page() {
@@ -421,33 +620,20 @@ function matrix_qc_snag_dashboard_page() {
     $open = array_filter($snags, static function ($s) {
         return matrix_qc_snag_is_open($s['status'] !== '' ? $s['status'] : 'new');
     });
-    usort($open, static function ($a, $b) {
-        $pa = absint($a['priority']);
-        $pb = absint($b['priority']);
-        $ha = $pa > 0 ? 0 : 1;
-        $hb = $pb > 0 ? 0 : 1;
-        if ($ha !== $hb) {
-            return $ha - $hb;
-        }
-        if ($pa !== $pb && $pa > 0 && $pb > 0) {
-            return $pa - $pb;
-        }
-        $sa = matrix_qc_snag_severity_weight($a['severity']);
-        $sb = matrix_qc_snag_severity_weight($b['severity']);
-        if ($sa !== $sb) {
-            return $sb - $sa;
-        }
-        return strcmp($a['created'], $b['created']);
-    });
+    usort($open, 'matrix_qc_snag_priority_cmp');
 
     $list_base = admin_url('edit.php?post_type=' . MATRIX_QC_SNAG_CPT);
 
-    $export_url = wp_nonce_url(
-        admin_url('admin-post.php?action=matrix_qc_export'),
-        'matrix_qc_export'
-    );
+    $export_url = wp_nonce_url(admin_url('admin-post.php?action=matrix_qc_export'), 'matrix_qc_export');
+    $brief_url  = wp_nonce_url(admin_url('admin-post.php?action=matrix_qc_brief'), 'matrix_qc_export');
+    $json_url   = wp_nonce_url(admin_url('admin-post.php?action=matrix_qc_json'), 'matrix_qc_export');
 
-    echo '<div class="wrap"><h1>QC Dashboard <a href="' . esc_url($export_url) . '" class="page-title-action">Export CSV</a></h1>';
+    echo '<div class="wrap"><h1>QC Dashboard ';
+    echo '<a href="' . esc_url($export_url) . '" class="page-title-action">Export CSV</a> ';
+    echo '<a href="' . esc_url($brief_url) . '" class="page-title-action">Agent brief (open)</a> ';
+    echo '<a href="' . esc_url($json_url) . '" class="page-title-action">Export JSON (open)</a>';
+    echo '</h1>';
+    echo '<p class="description">Agent brief and JSON cover open snags by default. Add <code>&amp;all=1</code> to the link to include resolved ones.</p>';
 
     // Summary cards.
     echo '<div style="display:flex;gap:12px;flex-wrap:wrap;margin:16px 0">';

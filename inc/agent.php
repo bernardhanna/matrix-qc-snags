@@ -75,6 +75,33 @@ function matrix_qc_agent_create($prompt) {
 }
 
 /**
+ * Validate the API key by calling the identity endpoint.
+ *
+ * @return array<string,mixed>|WP_Error
+ */
+function matrix_qc_agent_me() {
+    $cfg = matrix_qc_agent_config();
+    if ($cfg['api_key'] === '') {
+        return new WP_Error('no_key', 'Save an API key first, then test.');
+    }
+    $resp = wp_remote_get('https://api.cursor.com/v1/me', array(
+        'timeout' => 20,
+        'headers' => array(
+            'Authorization' => 'Basic ' . base64_encode($cfg['api_key'] . ':'),
+        ),
+    ));
+    if (is_wp_error($resp)) {
+        return $resp;
+    }
+    $code = wp_remote_retrieve_response_code($resp);
+    $data = json_decode(wp_remote_retrieve_body($resp), true);
+    if ($code < 200 || $code >= 300) {
+        return new WP_Error('api_error', 'Cursor API ' . $code . ': ' . wp_remote_retrieve_body($resp));
+    }
+    return is_array($data) ? $data : array();
+}
+
+/**
  * Fetch an agent's current record (to read PR/branch status).
  *
  * @param string $agent_id
@@ -335,6 +362,23 @@ function matrix_qc_agent_settings_page() {
         echo '<div class="notice notice-success"><p>Settings saved.</p></div>';
     }
 
+    if (isset($_POST['matrix_qc_agent_test']) &&
+        check_admin_referer('matrix_qc_agent_settings', 'matrix_qc_agent_settings_nonce')) {
+        $me = matrix_qc_agent_me();
+        if (is_wp_error($me)) {
+            echo '<div class="notice notice-error"><p>Connection failed: ' . esc_html($me->get_error_message()) . '</p></div>';
+        } else {
+            $who = '';
+            foreach (array('userEmail', 'email', 'apiKeyName', 'userId') as $k) {
+                if (!empty($me[$k])) {
+                    $who = (string) $me[$k];
+                    break;
+                }
+            }
+            echo '<div class="notice notice-success"><p>Connection OK' . ($who !== '' ? ' &mdash; authenticated as <strong>' . esc_html($who) . '</strong>' : '') . '.</p></div>';
+        }
+    }
+
     $cfg = matrix_qc_agent_config();
     echo '<div class="wrap"><h1>QC Agent</h1>';
     echo '<p>Connects flagged snags to the Cursor Cloud Agents API. The agent works on the theme repo and opens a pull request per dispatch.</p>';
@@ -359,12 +403,13 @@ function matrix_qc_agent_settings_page() {
         esc_attr($cfg['model'])
     );
     printf(
-        '<tr><th><label>Auto-create PR</label></th><td><label><input type="checkbox" name="matrix_qc_agent_autopr" %s /> Have the agent open a pull request automatically</label></td></tr>',
+        '<tr><th><label>Auto-create PR</label></th><td><label><input type="checkbox" name="matrix_qc_agent_autopr" %s /> Have the agent open a pull request automatically</label><p class="description">Each dispatch works on a new <code>cursor/&hellip;</code> branch off the base branch and opens a PR &mdash; your base branch is never committed to directly.</p></td></tr>',
         checked($cfg['auto_pr'], true, false)
     );
 
     echo '</tbody></table>';
-    echo '<p><button class="button button-primary" name="matrix_qc_agent_save" value="1">Save settings</button></p>';
+    echo '<p><button class="button button-primary" name="matrix_qc_agent_save" value="1">Save settings</button> ';
+    echo '<button class="button" name="matrix_qc_agent_test" value="1">Test connection</button></p>';
     echo '</form>';
     echo '<p>' . ($cfg['api_key'] !== '' ? 'Status: <strong>configured</strong>.' : 'Status: <strong>not configured</strong>.') . '</p>';
     echo '</div>';

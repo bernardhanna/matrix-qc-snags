@@ -373,10 +373,14 @@ function matrix_qc_agent_handle_dispatch() {
         wp_die('Forbidden');
     }
     check_admin_referer('matrix_qc_agent_dispatch');
-    $id  = isset($_GET['snag']) ? absint($_GET['snag']) : 0;
-    $res = matrix_qc_agent_dispatch_snag($id);
+    $id   = isset($_GET['snag']) ? absint($_GET['snag']) : 0;
+    $res  = matrix_qc_agent_dispatch_snag($id);
+    $dest = wp_get_referer();
+    if (!$dest) {
+        $dest = get_edit_post_link($id, 'url');
+    }
     matrix_qc_agent_redirect_with_notice(
-        get_edit_post_link($id, 'url'),
+        $dest,
         is_wp_error($res) ? $res->get_error_message() : 'Snag dispatched to the agent.'
     );
 }
@@ -463,6 +467,77 @@ function matrix_qc_agent_admin_notice() {
     }
 }
 add_action('admin_notices', 'matrix_qc_agent_admin_notice');
+
+/**
+ * Add a "Send to agent" row action on the snag list.
+ *
+ * @param array<string,string> $actions
+ * @param WP_Post              $post
+ * @return array<string,string>
+ */
+function matrix_qc_agent_row_action($actions, $post) {
+    if ($post->post_type !== MATRIX_QC_SNAG_CPT || !current_user_can(MATRIX_QC_SNAG_CAP) || !matrix_qc_agent_ready()) {
+        return $actions;
+    }
+    $url = wp_nonce_url(
+        admin_url('admin-post.php?action=matrix_qc_agent_dispatch&snag=' . $post->ID),
+        'matrix_qc_agent_dispatch'
+    );
+    $label = get_post_meta($post->ID, '_qc_agent_id', true) !== '' ? 'Re-send to agent' : 'Send to agent';
+    $actions['matrix_qc_agent'] = '<a href="' . esc_url($url) . '">' . esc_html($label) . '</a>';
+    return $actions;
+}
+add_filter('post_row_actions', 'matrix_qc_agent_row_action', 10, 2);
+
+/**
+ * Register the bulk "Send to agent" action.
+ *
+ * @param array<string,string> $actions
+ * @return array<string,string>
+ */
+function matrix_qc_agent_bulk_action($actions) {
+    if (matrix_qc_agent_ready()) {
+        $actions['matrix_qc_agent_send'] = 'Send to agent (one PR each)';
+    }
+    return $actions;
+}
+add_filter('bulk_actions-edit-' . MATRIX_QC_SNAG_CPT, 'matrix_qc_agent_bulk_action');
+
+/**
+ * Handle the bulk "Send to agent" action.
+ *
+ * @param string     $redirect
+ * @param string     $action
+ * @param array<int> $ids
+ * @return string
+ */
+function matrix_qc_agent_bulk_handle($redirect, $action, $ids) {
+    if ($action !== 'matrix_qc_agent_send') {
+        return $redirect;
+    }
+    if (!current_user_can(MATRIX_QC_SNAG_CAP)) {
+        wp_die('Forbidden');
+    }
+
+    $sent   = 0;
+    $errors = array();
+    foreach ($ids as $id) {
+        $res = matrix_qc_agent_dispatch_snag((int) $id);
+        if (is_wp_error($res)) {
+            $errors[] = $res->get_error_message();
+        } else {
+            $sent++;
+        }
+    }
+
+    $message = $sent . ' snag' . ($sent === 1 ? '' : 's') . ' dispatched to the agent.';
+    if (!empty($errors)) {
+        $message .= ' ' . count($errors) . ' failed: ' . implode('; ', array_unique($errors));
+    }
+    matrix_qc_agent_redirect_with_notice($redirect, $message);
+    return $redirect;
+}
+add_filter('handle_bulk_actions-edit-' . MATRIX_QC_SNAG_CPT, 'matrix_qc_agent_bulk_handle', 10, 3);
 
 /**
  * Register the Agent settings submenu.

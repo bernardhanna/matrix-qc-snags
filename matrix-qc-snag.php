@@ -40,6 +40,11 @@ function matrix_qc_snag_activate() {
 
     matrix_qc_snag_seed_figma_map();
 
+    // Best-effort: drop the CI gate workflow into the repo if it's missing.
+    if (function_exists('matrix_qc_agent_install_ci') && matrix_qc_agent_ci_path() !== '') {
+        matrix_qc_agent_install_ci(false);
+    }
+
     flush_rewrite_rules();
 }
 register_activation_hook(__FILE__, 'matrix_qc_snag_activate');

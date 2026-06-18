@@ -75,7 +75,7 @@ In WordPress: **QC Snags → Agent**.
 | Field | Value |
 | --- | --- |
 | **Cursor API key** | Paste the key from step 3. Stored in the WP database, never in git. |
-| **Repository URL** | `https://github.com/bernardhanna/st-patricks` |
+| **Repository URL** | Auto-detected from the theme repo's git remote; override if needed. |
 | **Base branch / ref** | `main` |
 | **Model** | Choose from the live dropdown, or leave **(account default)**. |
 | **Auto-create PR** | Leave **on**. |
@@ -85,10 +85,25 @@ Then:
 - Click **Test connection** → expect "Connection OK — authenticated as …".
 - Click **Check repo access** → expect "Cursor can access the configured repo".
 
-### 6. Add the CI gate (theme repo)
-The gate lives in the **theme** repo at `.github/workflows/qc-pr.yml` and runs on every pull request (so it gates the agent's `cursor/*` PRs): PHP lint, Pest unit tests, and an asset build. Merge that workflow into `main` so it's active. (Tracked separately in the `bernardhanna/st-patricks` repo.)
+### 6. Add the CI gate (one click)
+The gate lives in your repo at `.github/workflows/qc-pr.yml` and runs on every pull request (so it gates the agent's `cursor/*` PRs): PHP lint, Pest unit tests, and an asset build.
+
+- On **activation** the plugin auto-installs the workflow into the detected repo root (if it isn't already there).
+- You can also install/redownload it any time from **QC Snags → Agent → CI gate workflow** (Install into repo / Download `qc-pr.yml`).
+- After it's written, **commit and push** the file so the gate runs.
+
+The workflow is **project-agnostic**: the PHP, Pest and npm steps are skipped automatically when those files aren't present.
 
 ---
+
+## Reuse on other projects
+
+The plugin is project-agnostic — drop it into any WordPress site:
+
+- **Repo** is auto-detected from the active theme's git remote (override in settings).
+- **CI workflow** auto-installs to the repo root on activation and skips steps for tooling you don't use.
+- **Figma map is optional and per-project.** You don't have to build it: per-element Figma links on each snag work on their own. If you want page-level auto-suggestions, drop a CSV at `<theme>/old/qc-figma-map.csv` (columns: `PAGE URL, NAME, FIGMA DESKTOP, FIGMA MOBILE`) or hook `matrix_qc_snag_seed_csv_candidates`, then re-seed from the Figma Map page.
+- **Template hints** default to `template-parts/flexi/<slug>.php`; filter `matrix_qc_snag_template_hint` to match other project conventions.
 
 ## Daily usage
 

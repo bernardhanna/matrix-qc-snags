@@ -12,10 +12,20 @@ define('MATRIX_QC_FIGMA_MAP_OPTION', 'matrix_qc_figma_map');
  * @return string[]
  */
 function matrix_qc_snag_seed_csv_candidates() {
-    return array(
-        WP_CONTENT_DIR . '/themes/matrix-starter/old/St Pats ready for review - Sheet1.csv',
+    $candidates = array(
+        get_stylesheet_directory() . '/old/qc-figma-map.csv',
+        get_template_directory() . '/old/qc-figma-map.csv',
         get_stylesheet_directory() . '/old/St Pats ready for review - Sheet1.csv',
     );
+
+    /**
+     * Filter the candidate CSV paths used to seed the page -> Figma map.
+     * Projects can point this at their own export. The map is optional;
+     * per-element Figma links work without it.
+     *
+     * @param string[] $candidates
+     */
+    return apply_filters('matrix_qc_snag_seed_csv_candidates', $candidates);
 }
 
 /**
@@ -191,7 +201,16 @@ function matrix_qc_snag_template_hint($component) {
     if ($component === '') {
         return '';
     }
-    return 'template-parts/flexi/' . str_replace('-', '_', $component) . '.php';
+    $hint = 'template-parts/flexi/' . str_replace('-', '_', $component) . '.php';
+
+    /**
+     * Filter the likely template path for a block slug so non-flexi projects
+     * can map their own conventions.
+     *
+     * @param string $hint
+     * @param string $component
+     */
+    return apply_filters('matrix_qc_snag_template_hint', $hint, $component);
 }
 
 /**

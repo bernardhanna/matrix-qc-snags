@@ -8,6 +8,75 @@ define('MATRIX_QC_AGENT_ENDPOINT', 'https://api.cursor.com/v1/agents');
 define('MATRIX_QC_AGENT_CRON', 'matrix_qc_agent_poll_event');
 
 /**
+ * Find the git repository root by walking up from the active theme.
+ *
+ * @return string Absolute path to the repo root, or '' if not found.
+ */
+function matrix_qc_agent_git_root() {
+    $starts = array(get_stylesheet_directory(), get_template_directory());
+    foreach ($starts as $start) {
+        $dir = $start;
+        for ($i = 0; $i < 8 && $dir && $dir !== '/' && $dir !== '.'; $i++) {
+            if (is_dir($dir . '/.git')) {
+                return $dir;
+            }
+            $parent = dirname($dir);
+            if ($parent === $dir) {
+                break;
+            }
+            $dir = $parent;
+        }
+    }
+    return '';
+}
+
+/**
+ * Normalise a git remote URL to the https GitHub form.
+ *
+ * @param string $url
+ * @return string
+ */
+function matrix_qc_agent_normalize_remote($url) {
+    $url = trim($url);
+    if (preg_match('#^git@([^:]+):(.+?)(?:\.git)?$#', $url, $m)) {
+        return 'https://' . $m[1] . '/' . $m[2];
+    }
+    if (preg_match('#^ssh://git@([^/]+)/(.+?)(?:\.git)?$#', $url, $m)) {
+        return 'https://' . $m[1] . '/' . $m[2];
+    }
+    if (preg_match('#^https?://#', $url)) {
+        return preg_replace('#\.git$#', '', $url);
+    }
+    return $url;
+}
+
+/**
+ * Best-effort detect the GitHub repo URL from the theme repo's git config.
+ *
+ * @return string
+ */
+function matrix_qc_agent_detect_repo() {
+    static $cached = null;
+    if ($cached !== null) {
+        return $cached;
+    }
+    $cached = '';
+    $root   = matrix_qc_agent_git_root();
+    if ($root === '') {
+        return $cached;
+    }
+    $config = $root . '/.git/config';
+    if (!is_readable($config)) {
+        return $cached;
+    }
+    $contents = (string) file_get_contents($config);
+    if (preg_match('#\[remote "origin"\][^\[]*?url\s*=\s*(\S+)#s', $contents, $m)) {
+        $cached = matrix_qc_agent_normalize_remote($m[1]);
+    }
+    return $cached;
+}
+
+/**
  * Agent configuration from options (with sensible defaults).
  *
  * @return array<string,mixed>
@@ -15,7 +84,7 @@ define('MATRIX_QC_AGENT_CRON', 'matrix_qc_agent_poll_event');
 function matrix_qc_agent_config() {
     return array(
         'api_key' => (string) get_option('matrix_qc_agent_api_key', ''),
-        'repo'    => (string) get_option('matrix_qc_agent_repo', 'https://github.com/bernardhanna/st-patricks'),
+        'repo'    => (string) get_option('matrix_qc_agent_repo', matrix_qc_agent_detect_repo()),
         'ref'     => (string) get_option('matrix_qc_agent_ref', 'main'),
         'model'   => (string) get_option('matrix_qc_agent_model', ''),
         'auto_pr' => get_option('matrix_qc_agent_autopr', '1') === '1',
@@ -517,6 +586,143 @@ function matrix_qc_agent_admin_notice() {
 add_action('admin_notices', 'matrix_qc_agent_admin_notice');
 
 /**
+ * The CI gate workflow YAML (project-agnostic).
+ *
+ * @return string
+ */
+function matrix_qc_agent_ci_yaml() {
+    return <<<'YAML'
+name: QC PR Gate
+
+# Quality gate for pull requests (including agent-opened "cursor/*" PRs).
+# Must pass before a fix PR is merged into the base branch.
+# Installed by the Matrix QC Snag plugin.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: qc-pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  php:
+    name: PHP lint + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          coverage: none
+          tools: composer
+
+      - name: Lint all PHP files
+        run: |
+          find . -type f -name '*.php' \
+            -not -path './vendor/*' \
+            -not -path './node_modules/*' \
+            -print0 | xargs -0 -n1 -P4 php -l
+
+      - name: Install Composer dependencies
+        if: hashFiles('composer.json') != ''
+        run: composer install --no-interaction --prefer-dist --no-progress
+
+      - name: Run unit tests (Pest)
+        if: hashFiles('vendor/bin/pest') != ''
+        run: vendor/bin/pest tests/Unit
+
+  assets:
+    name: Build assets
+    runs-on: ubuntu-latest
+    if: hashFiles('package.json') != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build CSS + JS
+        run: npm run build --if-present
+YAML;
+}
+
+/**
+ * Absolute path where the CI workflow should live.
+ *
+ * @return string '' when no git root is detected.
+ */
+function matrix_qc_agent_ci_path() {
+    $root = matrix_qc_agent_git_root();
+    return $root === '' ? '' : $root . '/.github/workflows/qc-pr.yml';
+}
+
+/**
+ * Write the CI workflow into the repo (best effort).
+ *
+ * @param bool $overwrite
+ * @return true|WP_Error
+ */
+function matrix_qc_agent_install_ci($overwrite = false) {
+    $path = matrix_qc_agent_ci_path();
+    if ($path === '') {
+        return new WP_Error('no_git', 'No git repository found above the active theme.');
+    }
+    if (file_exists($path) && !$overwrite) {
+        return new WP_Error('exists', 'Workflow already present at ' . $path);
+    }
+    $dir = dirname($path);
+    if (!wp_mkdir_p($dir)) {
+        return new WP_Error('mkdir', 'Could not create ' . $dir);
+    }
+    if (file_put_contents($path, matrix_qc_agent_ci_yaml()) === false) {
+        return new WP_Error('write', 'Could not write ' . $path);
+    }
+    return true;
+}
+
+/**
+ * admin-post: install/overwrite the CI workflow.
+ */
+function matrix_qc_agent_handle_install_ci() {
+    if (!current_user_can(MATRIX_QC_SNAG_CAP)) {
+        wp_die('Forbidden');
+    }
+    check_admin_referer('matrix_qc_agent_install_ci');
+    $res  = matrix_qc_agent_install_ci(true);
+    $dest = admin_url('edit.php?post_type=' . MATRIX_QC_SNAG_CPT . '&page=matrix-qc-agent');
+    matrix_qc_agent_redirect_with_notice(
+        $dest,
+        is_wp_error($res) ? 'CI install failed: ' . $res->get_error_message() : 'CI workflow written to ' . matrix_qc_agent_ci_path() . ' &mdash; commit it to your repo.'
+    );
+}
+add_action('admin_post_matrix_qc_agent_install_ci', 'matrix_qc_agent_handle_install_ci');
+
+/**
+ * admin-post: download the CI workflow YAML.
+ */
+function matrix_qc_agent_handle_download_ci() {
+    if (!current_user_can(MATRIX_QC_SNAG_CAP)) {
+        wp_die('Forbidden');
+    }
+    check_admin_referer('matrix_qc_agent_download_ci');
+    header('Content-Type: text/yaml; charset=utf-8');
+    header('Content-Disposition: attachment; filename="qc-pr.yml"');
+    echo matrix_qc_agent_ci_yaml();
+    exit;
+}
+add_action('admin_post_matrix_qc_agent_download_ci', 'matrix_qc_agent_handle_download_ci');
+
+/**
  * Add a "Send to agent" row action on the snag list.
  *
  * @param array<string,string> $actions
@@ -736,5 +942,20 @@ function matrix_qc_agent_settings_page() {
     echo '<span class="description" style="display:block;margin-top:6px">Repo check is rate limited by Cursor (about 1/min) and can take a few seconds.</span></p>';
     echo '</form>';
     echo '<p>' . ($cfg['api_key'] !== '' ? 'Status: <strong>configured</strong>.' : 'Status: <strong>not configured</strong>.') . '</p>';
+
+    echo '<hr><h2>CI gate workflow</h2>';
+    echo '<p>The agent\'s PRs are gated by a GitHub Actions workflow (PHP lint + Pest unit tests + asset build) that lives in your repo at <code>.github/workflows/qc-pr.yml</code>.</p>';
+    $ci_path = matrix_qc_agent_ci_path();
+    if ($ci_path === '') {
+        echo '<p class="notice notice-warning" style="padding:8px 12px">No git repository detected above the active theme, so the workflow can\'t be installed automatically. Use Download and add it to your repo manually.</p>';
+    } else {
+        $present = file_exists($ci_path);
+        echo '<p>Target: <code>' . esc_html($ci_path) . '</code> &mdash; ' . ($present ? '<strong>present</strong>' : '<strong>not installed</strong>') . '.</p>';
+        $install_url = wp_nonce_url(admin_url('admin-post.php?action=matrix_qc_agent_install_ci'), 'matrix_qc_agent_install_ci');
+        echo '<p><a class="button button-primary" href="' . esc_url($install_url) . '">' . ($present ? 'Reinstall / overwrite workflow' : 'Install workflow into repo') . '</a> ';
+    }
+    $download_url = wp_nonce_url(admin_url('admin-post.php?action=matrix_qc_agent_download_ci'), 'matrix_qc_agent_download_ci');
+    echo '<a class="button" href="' . esc_url($download_url) . '">Download qc-pr.yml</a></p>';
+    echo '<p class="description">After installing, commit and push the file so the gate runs on PRs. The workflow is project-agnostic: PHP/Pest/npm steps are skipped automatically if those files don\'t exist.</p>';
     echo '</div>';
 }

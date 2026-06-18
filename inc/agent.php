@@ -232,26 +232,39 @@ function matrix_qc_agent_dispatch_snag($id) {
     if (is_wp_error($res)) {
         return $res;
     }
-    $aid = isset($res['id']) ? (string) $res['id'] : '';
-    update_post_meta($id, '_qc_agent_id', $aid);
-    update_post_meta($id, '_qc_agent_url', matrix_qc_agent_url($res));
+    $agent = matrix_qc_agent_obj($res);
+    update_post_meta($id, '_qc_agent_id', isset($agent['id']) ? (string) $agent['id'] : '');
+    update_post_meta($id, '_qc_agent_url', matrix_qc_agent_url($agent));
     update_post_meta($id, '_qc_status', 'in_progress');
     matrix_qc_agent_ensure_cron();
     return $res;
 }
 
 /**
- * Best-effort agent dashboard URL (API may omit `url`).
+ * The Create response nests the agent under `agent`; normalise it.
  *
  * @param array<string,mixed> $res
+ * @return array<string,mixed>
+ */
+function matrix_qc_agent_obj($res) {
+    if (isset($res['agent']) && is_array($res['agent'])) {
+        return $res['agent'];
+    }
+    return is_array($res) ? $res : array();
+}
+
+/**
+ * Best-effort agent dashboard URL (API may omit `url`).
+ *
+ * @param array<string,mixed> $agent
  * @return string
  */
-function matrix_qc_agent_url($res) {
-    if (!empty($res['url'])) {
-        return (string) $res['url'];
+function matrix_qc_agent_url($agent) {
+    if (!empty($agent['url'])) {
+        return (string) $agent['url'];
     }
-    if (!empty($res['id'])) {
-        return 'https://cursor.com/agents/' . rawurlencode((string) $res['id']);
+    if (!empty($agent['id'])) {
+        return 'https://cursor.com/agents/' . rawurlencode((string) $agent['id']);
     }
     return '';
 }
@@ -276,8 +289,9 @@ function matrix_qc_agent_dispatch_open() {
         return $res;
     }
 
-    $aid = isset($res['id']) ? (string) $res['id'] : '';
-    $url = matrix_qc_agent_url($res);
+    $agent = matrix_qc_agent_obj($res);
+    $aid   = isset($agent['id']) ? (string) $agent['id'] : '';
+    $url   = matrix_qc_agent_url($agent);
     foreach ($snags as $s) {
         update_post_meta($s['id'], '_qc_agent_id', $aid);
         update_post_meta($s['id'], '_qc_agent_url', $url);

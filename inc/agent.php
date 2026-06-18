@@ -232,11 +232,28 @@ function matrix_qc_agent_dispatch_snag($id) {
     if (is_wp_error($res)) {
         return $res;
     }
-    update_post_meta($id, '_qc_agent_id', isset($res['id']) ? $res['id'] : '');
-    update_post_meta($id, '_qc_agent_url', isset($res['url']) ? $res['url'] : '');
+    $aid = isset($res['id']) ? (string) $res['id'] : '';
+    update_post_meta($id, '_qc_agent_id', $aid);
+    update_post_meta($id, '_qc_agent_url', matrix_qc_agent_url($res));
     update_post_meta($id, '_qc_status', 'in_progress');
     matrix_qc_agent_ensure_cron();
     return $res;
+}
+
+/**
+ * Best-effort agent dashboard URL (API may omit `url`).
+ *
+ * @param array<string,mixed> $res
+ * @return string
+ */
+function matrix_qc_agent_url($res) {
+    if (!empty($res['url'])) {
+        return (string) $res['url'];
+    }
+    if (!empty($res['id'])) {
+        return 'https://cursor.com/agents/' . rawurlencode((string) $res['id']);
+    }
+    return '';
 }
 
 /**
@@ -259,9 +276,11 @@ function matrix_qc_agent_dispatch_open() {
         return $res;
     }
 
+    $aid = isset($res['id']) ? (string) $res['id'] : '';
+    $url = matrix_qc_agent_url($res);
     foreach ($snags as $s) {
-        update_post_meta($s['id'], '_qc_agent_id', isset($res['id']) ? $res['id'] : '');
-        update_post_meta($s['id'], '_qc_agent_url', isset($res['url']) ? $res['url'] : '');
+        update_post_meta($s['id'], '_qc_agent_id', $aid);
+        update_post_meta($s['id'], '_qc_agent_url', $url);
         update_post_meta($s['id'], '_qc_status', 'in_progress');
     }
     matrix_qc_agent_ensure_cron();

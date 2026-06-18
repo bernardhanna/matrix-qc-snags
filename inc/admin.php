@@ -217,11 +217,16 @@ function matrix_qc_snag_render_metabox($post) {
             'matrix_qc_agent_dispatch'
         );
         $dispatched = $data['agent_id'] !== '';
+        $agent_url  = $data['agent_url'];
+        if ($agent_url === '' && $data['agent_id'] !== '') {
+            $agent_url = 'https://cursor.com/agents/' . rawurlencode($data['agent_id']);
+        }
         echo '<tr><th>Agent</th><td>';
         if ($dispatched) {
-            echo '<p style="margin:0 0 8px"><strong>Dispatched.</strong> Status: <code>' . esc_html(matrix_qc_snag_status_label($data['status'])) . '</code></p>';
-            if ($data['agent_url']) {
-                echo '<p style="margin:0 0 8px"><a href="' . esc_url($data['agent_url']) . '" target="_blank">View live agent run on cursor.com &rarr;</a></p>';
+            echo '<p style="margin:0 0 8px"><strong>Dispatched.</strong> Status: <code>' . esc_html(matrix_qc_snag_status_label($data['status'])) . '</code>';
+            echo ' &middot; agent <code>' . esc_html($data['agent_id']) . '</code></p>';
+            if ($agent_url) {
+                echo '<p style="margin:0 0 8px"><a href="' . esc_url($agent_url) . '" target="_blank">View live agent run on cursor.com &rarr;</a></p>';
             }
             if ($data['pr_url']) {
                 echo '<p style="margin:0 0 8px">PR: <a href="' . esc_url($data['pr_url']) . '" target="_blank">' . esc_html($data['pr_url']) . '</a></p>';

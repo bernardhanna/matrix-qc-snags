@@ -117,7 +117,7 @@ The plugin is project-agnostic — drop it into any WordPress site:
 2. Click an element, fill in the snag (title, category, severity, optional Figma link), save.
 3. Triage on **QC Snags → Dashboard** (set priority, status).
 4. Fix it one of two ways:
-   - **Content (text) fix — no git:** on the snag, type the replacement in **Content fix**, Save, then **Apply content fix**. Undo any time with **Revert content fix**.
+   - **Content (text) fix — no git:** on the snag, type the replacement in **Content fix**, Save, click **Preview changes** to see exactly which fields/occurrences will change (old → new), then **Apply content fix**. Undo any time with **Revert content fix**.
    - **Code/design fix — via agent:** dispatch to the Cursor agent:
      - One snag: edit screen or the **Send to agent** row action.
      - Several: select snags → **Bulk actions → Send to agent (one PR each / one combined PR)**.
@@ -170,5 +170,5 @@ CI gate (in the theme repo): `.github/workflows/qc-pr.yml`.
 ## Roadmap
 
 - **Done** — Phase 1 (capture + dashboard + exports), Phase 2 (content auto-fixer with revert, per-snag PR revert, auto PR comment), Phase 3 (agent bridge + CI gate).
-- **Ideas** — diff preview before applying a content fix; richer field targeting (specific ACF field vs whole-page text match); merge-status sync from GitHub.
+- **Ideas** — richer field targeting (specific ACF field vs whole-page text match); merge-status sync from GitHub.
 ```

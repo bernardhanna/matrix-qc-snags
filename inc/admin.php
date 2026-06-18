@@ -262,12 +262,20 @@ function matrix_qc_snag_render_metabox($post) {
     if ($data['element_text'] === '') {
         echo '<p class="description">No element text was captured for this snag, so a direct content fix isn\'t available. Use the agent instead.</p>';
     } else {
+        $preview_url = wp_nonce_url(
+            admin_url('admin-post.php?action=matrix_qc_content_preview&snag=' . $post->ID),
+            'matrix_qc_content_fix'
+        );
         $apply_url = wp_nonce_url(
             admin_url('admin-post.php?action=matrix_qc_content_apply&snag=' . $post->ID),
             'matrix_qc_content_fix'
         );
-        echo '<p style="margin:8px 0 0"><a class="button button-primary" href="' . esc_url($apply_url) . '">Apply content fix</a> ';
-        echo '<span class="description">Save the snag first to store your replacement, then Apply.</span></p>';
+        echo '<p style="margin:8px 0 0"><a class="button" href="' . esc_url($preview_url) . '">Preview changes</a> ';
+        echo '<a class="button button-primary" href="' . esc_url($apply_url) . '">Apply content fix</a> ';
+        echo '<span class="description">Save the snag first to store your replacement, then Preview/Apply.</span></p>';
+        if (function_exists('matrix_qc_content_render_preview')) {
+            matrix_qc_content_render_preview($post->ID);
+        }
     }
     if ($has_revert) {
         $revert_url = wp_nonce_url(

@@ -270,15 +270,23 @@ function matrix_qc_agent_url($agent) {
 }
 
 /**
- * Dispatch all open snags as a single batch agent (one PR).
+ * Dispatch a set of snags as a single combined agent (one PR).
  *
+ * @param array<int> $ids
  * @return array<string,mixed>|WP_Error
  */
-function matrix_qc_agent_dispatch_open() {
-    $snags = matrix_qc_snag_fetch_sorted(true);
-    if (empty($snags)) {
-        return new WP_Error('none', 'No open snags to dispatch.');
+function matrix_qc_agent_dispatch_ids($ids) {
+    $snags = array();
+    foreach ($ids as $id) {
+        $post = get_post((int) $id);
+        if ($post && $post->post_type === MATRIX_QC_SNAG_CPT) {
+            $snags[] = matrix_qc_snag_to_array($post);
+        }
     }
+    if (empty($snags)) {
+        return new WP_Error('none', 'No valid snags to dispatch.');
+    }
+
     $prompt = "You are fixing a batch of QC snags on a WordPress theme (ACF blocks + Tailwind). "
         . "Address each snag with minimal, focused changes that match existing patterns and the Figma references, grouped by template where possible. "
         . "Do not refactor unrelated code. When done, open a single pull request.\n\n"
@@ -299,6 +307,46 @@ function matrix_qc_agent_dispatch_open() {
     }
     matrix_qc_agent_ensure_cron();
     return $res;
+}
+
+/**
+ * Dispatch all open snags as a single combined agent (one PR).
+ *
+ * @return array<string,mixed>|WP_Error
+ */
+function matrix_qc_agent_dispatch_open() {
+    $snags = matrix_qc_snag_fetch_sorted(true);
+    if (empty($snags)) {
+        return new WP_Error('none', 'No open snags to dispatch.');
+    }
+    return matrix_qc_agent_dispatch_ids(wp_list_pluck($snags, 'id'));
+}
+
+/**
+ * List GitHub repositories Cursor can access (rate limited: 1/min, 30/hr).
+ *
+ * @return array<int,array<string,mixed>>|WP_Error
+ */
+function matrix_qc_agent_repositories() {
+    $cfg = matrix_qc_agent_config();
+    if ($cfg['api_key'] === '') {
+        return new WP_Error('no_key', 'No API key');
+    }
+    $resp = wp_remote_get('https://api.cursor.com/v1/repositories', array(
+        'timeout' => 45,
+        'headers' => array(
+            'Authorization' => 'Basic ' . base64_encode($cfg['api_key'] . ':'),
+        ),
+    ));
+    if (is_wp_error($resp)) {
+        return $resp;
+    }
+    $code = wp_remote_retrieve_response_code($resp);
+    $data = json_decode(wp_remote_retrieve_body($resp), true);
+    if ($code < 200 || $code >= 300) {
+        return new WP_Error('api_error', 'Cursor API ' . $code . ': ' . wp_remote_retrieve_body($resp));
+    }
+    return isset($data['items']) && is_array($data['items']) ? $data['items'] : array();
 }
 
 /**
@@ -497,14 +545,15 @@ add_filter('post_row_actions', 'matrix_qc_agent_row_action', 10, 2);
  */
 function matrix_qc_agent_bulk_action($actions) {
     if (matrix_qc_agent_ready()) {
-        $actions['matrix_qc_agent_send'] = 'Send to agent (one PR each)';
+        $actions['matrix_qc_agent_send']          = 'Send to agent (one PR each)';
+        $actions['matrix_qc_agent_send_combined'] = 'Send to agent (one combined PR)';
     }
     return $actions;
 }
 add_filter('bulk_actions-edit-' . MATRIX_QC_SNAG_CPT, 'matrix_qc_agent_bulk_action');
 
 /**
- * Handle the bulk "Send to agent" action.
+ * Handle the bulk "Send to agent" actions.
  *
  * @param string     $redirect
  * @param string     $action
@@ -512,11 +561,20 @@ add_filter('bulk_actions-edit-' . MATRIX_QC_SNAG_CPT, 'matrix_qc_agent_bulk_acti
  * @return string
  */
 function matrix_qc_agent_bulk_handle($redirect, $action, $ids) {
-    if ($action !== 'matrix_qc_agent_send') {
+    if ($action !== 'matrix_qc_agent_send' && $action !== 'matrix_qc_agent_send_combined') {
         return $redirect;
     }
     if (!current_user_can(MATRIX_QC_SNAG_CAP)) {
         wp_die('Forbidden');
+    }
+
+    if ($action === 'matrix_qc_agent_send_combined') {
+        $res     = matrix_qc_agent_dispatch_ids(array_map('intval', $ids));
+        $message = is_wp_error($res)
+            ? 'Combined dispatch failed: ' . $res->get_error_message()
+            : count($ids) . ' snags dispatched to the agent in one combined PR.';
+        matrix_qc_agent_redirect_with_notice($redirect, $message);
+        return $redirect;
     }
 
     $sent   = 0;
@@ -585,6 +643,31 @@ function matrix_qc_agent_settings_page() {
         }
     }
 
+    if (isset($_POST['matrix_qc_agent_repos']) &&
+        check_admin_referer('matrix_qc_agent_settings', 'matrix_qc_agent_settings_nonce')) {
+        $repos = matrix_qc_agent_repositories();
+        if (is_wp_error($repos)) {
+            echo '<div class="notice notice-error"><p>Repo check failed: ' . esc_html($repos->get_error_message()) . '</p></div>';
+        } else {
+            $want  = rtrim(strtolower(get_option('matrix_qc_agent_repo', '')), '/');
+            $found = false;
+            $urls  = array();
+            foreach ($repos as $r) {
+                if (!empty($r['url'])) {
+                    $urls[] = (string) $r['url'];
+                    if (rtrim(strtolower((string) $r['url']), '/') === $want) {
+                        $found = true;
+                    }
+                }
+            }
+            if ($found) {
+                echo '<div class="notice notice-success"><p>Cursor can access the configured repo &mdash; agents can open PRs on it.</p></div>';
+            } else {
+                echo '<div class="notice notice-warning"><p>The configured repo is <strong>not</strong> in Cursor\'s accessible list. Connect it in Cursor &rarr; Integrations &rarr; GitHub. ' . (count($urls) ? 'Visible repos: ' . esc_html(implode(', ', array_slice($urls, 0, 25))) : 'No repos visible to this key.') . '</p></div>';
+            }
+        }
+    }
+
     $cfg = matrix_qc_agent_config();
     echo '<div class="wrap"><h1>QC Agent</h1>';
     echo '<p>Connects flagged snags to the Cursor Cloud Agents API. The agent works on the theme repo and opens a pull request per dispatch.</p>';
@@ -648,7 +731,9 @@ function matrix_qc_agent_settings_page() {
 
     echo '</tbody></table>';
     echo '<p><button class="button button-primary" name="matrix_qc_agent_save" value="1">Save settings</button> ';
-    echo '<button class="button" name="matrix_qc_agent_test" value="1">Test connection</button></p>';
+    echo '<button class="button" name="matrix_qc_agent_test" value="1">Test connection</button> ';
+    echo '<button class="button" name="matrix_qc_agent_repos" value="1">Check repo access</button>';
+    echo '<span class="description" style="display:block;margin-top:6px">Repo check is rate limited by Cursor (about 1/min) and can take a few seconds.</span></p>';
     echo '</form>';
     echo '<p>' . ($cfg['api_key'] !== '' ? 'Status: <strong>configured</strong>.' : 'Status: <strong>not configured</strong>.') . '</p>';
     echo '</div>';

@@ -22,6 +22,7 @@ require_once MATRIX_QC_SNAG_DIR . 'inc/figma-map.php';
 require_once MATRIX_QC_SNAG_DIR . 'inc/rest.php';
 require_once MATRIX_QC_SNAG_DIR . 'inc/admin.php';
 require_once MATRIX_QC_SNAG_DIR . 'inc/overlay.php';
+require_once MATRIX_QC_SNAG_DIR . 'inc/agent.php';
 
 /**
  * Grant the QC capability to administrators and editors on activation,
@@ -47,6 +48,7 @@ register_activation_hook(__FILE__, 'matrix_qc_snag_activate');
  * Clean up rewrite rules on deactivation. Capabilities and data are kept.
  */
 function matrix_qc_snag_deactivate() {
+    wp_clear_scheduled_hook(MATRIX_QC_AGENT_CRON);
     flush_rewrite_rules();
 }
 register_deactivation_hook(__FILE__, 'matrix_qc_snag_deactivate');

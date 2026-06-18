@@ -186,6 +186,7 @@ function matrix_qc_snag_render_metabox($post) {
         'Figma page'    => $data['figma_node'] ? '<a href="' . esc_url(matrix_qc_snag_figma_view_url($data['figma_node'])) . '" target="_blank">open reference</a>' : '&mdash;',
         'Figma element' => $data['figma_element'] ? '<a href="' . esc_url(matrix_qc_snag_figma_view_url($data['figma_element'])) . '" target="_blank">open element</a>' : '&mdash;',
         'Figma node id' => $data['figma_node_id'] !== '' ? '<code>' . esc_html($data['figma_file_key'] . ' / ' . $data['figma_node_id']) . '</code>' : '&mdash;',
+        'Agent'    => $data['agent_url'] ? '<a href="' . esc_url($data['agent_url']) . '" target="_blank">view agent run</a>' : '&mdash;',
         'PR'       => $data['pr_url'] ? '<a href="' . esc_url($data['pr_url']) . '" target="_blank">' . esc_html($data['pr_url']) . '</a>' : '&mdash;',
     );
     foreach ($rows as $label => $value) {
@@ -211,6 +212,15 @@ function matrix_qc_snag_render_metabox($post) {
         esc_attr((string) absint($data['priority']))
     );
     echo '</td></tr>';
+
+    if (function_exists('matrix_qc_agent_ready') && matrix_qc_agent_ready()) {
+        $dispatch_url = wp_nonce_url(
+            admin_url('admin-post.php?action=matrix_qc_agent_dispatch&snag=' . $post->ID),
+            'matrix_qc_agent_dispatch'
+        );
+        echo '<tr><th>Agent</th><td><a class="button" href="' . esc_url($dispatch_url) . '">Send this snag to the agent</a>';
+        echo ' <span class="description">Creates a branch + PR on the theme repo.</span></td></tr>';
+    }
 
     if ($data['screenshot_url']) {
         echo '<tr><th>Screenshot</th><td><img src="' . esc_url($data['screenshot_url']) . '" style="max-width:100%;height:auto;border:1px solid #ddd" /></td></tr>';
@@ -632,6 +642,13 @@ function matrix_qc_snag_dashboard_page() {
     echo '<a href="' . esc_url($export_url) . '" class="page-title-action">Export CSV</a> ';
     echo '<a href="' . esc_url($brief_url) . '" class="page-title-action">Agent brief (open)</a> ';
     echo '<a href="' . esc_url($json_url) . '" class="page-title-action">Export JSON (open)</a>';
+    if (function_exists('matrix_qc_agent_ready') && matrix_qc_agent_ready()) {
+        $dispatch_url = wp_nonce_url(
+            admin_url('admin-post.php?action=matrix_qc_agent_dispatch_open'),
+            'matrix_qc_agent_dispatch'
+        );
+        echo ' <a href="' . esc_url($dispatch_url) . '" class="page-title-action" onclick="return confirm(\'Dispatch all open snags to the agent as one PR?\')">Dispatch open to agent</a>';
+    }
     echo '</h1>';
     echo '<p class="description">Agent brief and JSON cover open snags by default. Add <code>&amp;all=1</code> to the link to include resolved ones.</p>';
 

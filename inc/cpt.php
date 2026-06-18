@@ -33,6 +33,8 @@ function matrix_qc_snag_meta_keys() {
         'priority'       => '_qc_priority',
         'status'         => '_qc_status',
         'pr_url'         => '_qc_pr_url',
+        'agent_id'       => '_qc_agent_id',
+        'agent_url'      => '_qc_agent_url',
         'revert_payload' => '_qc_revert_payload',
     );
 }
@@ -120,7 +122,8 @@ function matrix_qc_snag_register_cpt() {
         '_qc_page_url', '_qc_page_path', '_qc_page_title', '_qc_selector',
         '_qc_xpath', '_qc_component', '_qc_classes', '_qc_element_text', '_qc_styles', '_qc_bbox', '_qc_viewport',
         '_qc_figma_node', '_qc_figma_element', '_qc_figma_file_key', '_qc_figma_node_id',
-        '_qc_type', '_qc_severity', '_qc_status', '_qc_pr_url', '_qc_revert_payload',
+        '_qc_type', '_qc_severity', '_qc_status', '_qc_pr_url', '_qc_agent_id',
+        '_qc_agent_url', '_qc_revert_payload',
     );
     foreach ($string_meta as $key) {
         register_post_meta(MATRIX_QC_SNAG_CPT, $key, array(

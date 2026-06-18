@@ -350,6 +350,46 @@ function matrix_qc_agent_handle_dispatch() {
 add_action('admin_post_matrix_qc_agent_dispatch', 'matrix_qc_agent_handle_dispatch');
 
 /**
+ * admin-post: check a single snag's agent status now.
+ */
+function matrix_qc_agent_handle_check() {
+    if (!current_user_can(MATRIX_QC_SNAG_CAP)) {
+        wp_die('Forbidden');
+    }
+    check_admin_referer('matrix_qc_agent_dispatch');
+    $id  = isset($_GET['snag']) ? absint($_GET['snag']) : 0;
+    $aid = $id ? get_post_meta($id, '_qc_agent_id', true) : '';
+
+    if ($aid === '') {
+        matrix_qc_agent_redirect_with_notice(get_edit_post_link($id, 'url'), 'No agent has been dispatched for this snag yet.');
+    }
+
+    $info = matrix_qc_agent_get($aid);
+    if (is_wp_error($info)) {
+        matrix_qc_agent_redirect_with_notice(get_edit_post_link($id, 'url'), 'Check failed: ' . $info->get_error_message());
+    }
+
+    $agent_status = isset($info['status']) ? (string) $info['status'] : 'unknown';
+    $pr           = matrix_qc_agent_extract_pr($info);
+    if ($pr !== '') {
+        update_post_meta($id, '_qc_pr_url', $pr);
+        update_post_meta($id, '_qc_status', 'pr_open');
+        matrix_qc_agent_redirect_with_notice(get_edit_post_link($id, 'url'), 'Agent ' . $agent_status . '. PR opened: ' . $pr);
+    }
+
+    $branch = '';
+    if (!empty($info['git']['branches'][0]['branch'])) {
+        $branch = (string) $info['git']['branches'][0]['branch'];
+    }
+    $suffix = $branch !== '' ? ' Branch pushed: ' . $branch . ' (no PR opened yet).' : ' No branch pushed yet.';
+    matrix_qc_agent_redirect_with_notice(
+        get_edit_post_link($id, 'url'),
+        'Agent status: ' . $agent_status . '.' . $suffix
+    );
+}
+add_action('admin_post_matrix_qc_agent_check', 'matrix_qc_agent_handle_check');
+
+/**
  * admin-post: dispatch all open snags as one batch.
  */
 function matrix_qc_agent_handle_dispatch_open() {

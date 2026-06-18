@@ -186,8 +186,6 @@ function matrix_qc_snag_render_metabox($post) {
         'Figma page'    => $data['figma_node'] ? '<a href="' . esc_url(matrix_qc_snag_figma_view_url($data['figma_node'])) . '" target="_blank">open reference</a>' : '&mdash;',
         'Figma element' => $data['figma_element'] ? '<a href="' . esc_url(matrix_qc_snag_figma_view_url($data['figma_element'])) . '" target="_blank">open element</a>' : '&mdash;',
         'Figma node id' => $data['figma_node_id'] !== '' ? '<code>' . esc_html($data['figma_file_key'] . ' / ' . $data['figma_node_id']) . '</code>' : '&mdash;',
-        'Agent'    => $data['agent_url'] ? '<a href="' . esc_url($data['agent_url']) . '" target="_blank">view agent run</a>' : '&mdash;',
-        'PR'       => $data['pr_url'] ? '<a href="' . esc_url($data['pr_url']) . '" target="_blank">' . esc_html($data['pr_url']) . '</a>' : '&mdash;',
     );
     foreach ($rows as $label => $value) {
         echo '<tr><th>' . esc_html($label) . '</th><td>' . wp_kses_post($value) . '</td></tr>';
@@ -218,8 +216,29 @@ function matrix_qc_snag_render_metabox($post) {
             admin_url('admin-post.php?action=matrix_qc_agent_dispatch&snag=' . $post->ID),
             'matrix_qc_agent_dispatch'
         );
-        echo '<tr><th>Agent</th><td><a class="button" href="' . esc_url($dispatch_url) . '">Send this snag to the agent</a>';
-        echo ' <span class="description">Creates a branch + PR on the theme repo.</span></td></tr>';
+        $dispatched = $data['agent_id'] !== '';
+        echo '<tr><th>Agent</th><td>';
+        if ($dispatched) {
+            echo '<p style="margin:0 0 8px"><strong>Dispatched.</strong> Status: <code>' . esc_html(matrix_qc_snag_status_label($data['status'])) . '</code></p>';
+            if ($data['agent_url']) {
+                echo '<p style="margin:0 0 8px"><a href="' . esc_url($data['agent_url']) . '" target="_blank">View live agent run on cursor.com &rarr;</a></p>';
+            }
+            if ($data['pr_url']) {
+                echo '<p style="margin:0 0 8px">PR: <a href="' . esc_url($data['pr_url']) . '" target="_blank">' . esc_html($data['pr_url']) . '</a></p>';
+            } else {
+                echo '<p style="margin:0 0 8px" class="description">No PR yet &mdash; the agent is still working, or hasn\'t pushed. Use &ldquo;Check now&rdquo;.</p>';
+            }
+            $check_url = wp_nonce_url(
+                admin_url('admin-post.php?action=matrix_qc_agent_check&snag=' . $post->ID),
+                'matrix_qc_agent_dispatch'
+            );
+            echo '<a class="button button-primary" href="' . esc_url($check_url) . '">Check now</a> ';
+            echo '<a class="button" href="' . esc_url($dispatch_url) . '" onclick="return confirm(\'Start a new agent run for this snag?\')">Re-dispatch</a>';
+        } else {
+            echo '<a class="button button-primary" href="' . esc_url($dispatch_url) . '">Send this snag to the agent</a>';
+            echo ' <span class="description">Creates a branch + PR on the theme repo.</span>';
+        }
+        echo '</td></tr>';
     }
 
     if ($data['screenshot_url']) {

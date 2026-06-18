@@ -712,7 +712,7 @@ jobs:
 
       - name: Run unit tests (Pest)
         if: hashFiles('vendor/bin/pest') != ''
-        run: vendor/bin/pest tests/Unit
+        run: php vendor/bin/pest tests/Unit
 
   assets:
     name: Build assets

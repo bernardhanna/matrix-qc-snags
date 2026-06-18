@@ -17,7 +17,7 @@ function matrix_qc_agent_config() {
         'api_key' => (string) get_option('matrix_qc_agent_api_key', ''),
         'repo'    => (string) get_option('matrix_qc_agent_repo', 'https://github.com/bernardhanna/st-patricks'),
         'ref'     => (string) get_option('matrix_qc_agent_ref', 'main'),
-        'model'   => (string) get_option('matrix_qc_agent_model', 'composer-2'),
+        'model'   => (string) get_option('matrix_qc_agent_model', ''),
         'auto_pr' => get_option('matrix_qc_agent_autopr', '1') === '1',
     );
 }
@@ -72,6 +72,33 @@ function matrix_qc_agent_create($prompt) {
     }
 
     return is_array($data) ? $data : array();
+}
+
+/**
+ * List models available to the account.
+ *
+ * @return array<int,array<string,mixed>>|WP_Error
+ */
+function matrix_qc_agent_models() {
+    $cfg = matrix_qc_agent_config();
+    if ($cfg['api_key'] === '') {
+        return new WP_Error('no_key', 'No API key');
+    }
+    $resp = wp_remote_get('https://api.cursor.com/v1/models', array(
+        'timeout' => 20,
+        'headers' => array(
+            'Authorization' => 'Basic ' . base64_encode($cfg['api_key'] . ':'),
+        ),
+    ));
+    if (is_wp_error($resp)) {
+        return $resp;
+    }
+    $code = wp_remote_retrieve_response_code($resp);
+    $data = json_decode(wp_remote_retrieve_body($resp), true);
+    if ($code < 200 || $code >= 300) {
+        return new WP_Error('api_error', 'Cursor API ' . $code . ': ' . wp_remote_retrieve_body($resp));
+    }
+    return isset($data['items']) && is_array($data['items']) ? $data['items'] : array();
 }
 
 /**
@@ -398,10 +425,43 @@ function matrix_qc_agent_settings_page() {
         '<tr><th><label>Base branch / ref</label></th><td><input type="text" name="matrix_qc_agent_ref" value="%s" class="regular-text" /></td></tr>',
         esc_attr($cfg['ref'])
     );
-    printf(
-        '<tr><th><label>Model id</label></th><td><input type="text" name="matrix_qc_agent_model" value="%s" class="regular-text" /><p class="description">e.g. <code>composer-2</code>. Leave blank for the account default.</p></td></tr>',
-        esc_attr($cfg['model'])
-    );
+    $models = $cfg['api_key'] !== '' ? matrix_qc_agent_models() : new WP_Error('no_key', '');
+    echo '<tr><th><label>Model</label></th><td>';
+    if (!is_wp_error($models) && !empty($models)) {
+        echo '<select name="matrix_qc_agent_model" class="regular-text">';
+        echo '<option value="">(account default)</option>';
+        $found = false;
+        foreach ($models as $m) {
+            $id = isset($m['id']) ? (string) $m['id'] : '';
+            if ($id === '') {
+                continue;
+            }
+            $name = isset($m['displayName']) ? (string) $m['displayName'] : $id;
+            if ($id === $cfg['model']) {
+                $found = true;
+            }
+            printf(
+                '<option value="%s" %s>%s</option>',
+                esc_attr($id),
+                selected($cfg['model'], $id, false),
+                esc_html($name . ' (' . $id . ')')
+            );
+        }
+        if (!$found && $cfg['model'] !== '') {
+            printf('<option value="%s" selected>%s (saved, not in list)</option>', esc_attr($cfg['model']), esc_html($cfg['model']));
+        }
+        echo '</select><p class="description">Models your account can use. Leave on default if unsure.</p>';
+    } else {
+        $hint = is_wp_error($models) && $models->get_error_code() !== 'no_key'
+            ? ' <span class="description">Could not load models: ' . esc_html($models->get_error_message()) . '</span>'
+            : ' <span class="description">Save a valid API key to load the model list.</span>';
+        printf(
+            '<input type="text" name="matrix_qc_agent_model" value="%s" class="regular-text" placeholder="(account default)" />%s',
+            esc_attr($cfg['model']),
+            $hint
+        );
+    }
+    echo '</td></tr>';
     printf(
         '<tr><th><label>Auto-create PR</label></th><td><label><input type="checkbox" name="matrix_qc_agent_autopr" %s /> Have the agent open a pull request automatically</label><p class="description">Each dispatch works on a new <code>cursor/&hellip;</code> branch off the base branch and opens a PR &mdash; your base branch is never committed to directly.</p></td></tr>',
         checked($cfg['auto_pr'], true, false)

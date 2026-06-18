@@ -49,8 +49,10 @@ function matrix_qc_agent_create($prompt) {
         'repos'        => array(array('url' => $cfg['repo'], 'startingRef' => $cfg['ref'])),
         'autoCreatePR' => (bool) $cfg['auto_pr'],
     );
-    if ($cfg['model'] !== '') {
-        $body['model'] = array('id' => $cfg['model']);
+
+    $model = matrix_qc_agent_valid_model($cfg['model']);
+    if ($model !== '') {
+        $body['model'] = array('id' => $model);
     }
 
     $resp = wp_remote_post(MATRIX_QC_AGENT_ENDPOINT, array(
@@ -72,6 +74,35 @@ function matrix_qc_agent_create($prompt) {
     }
 
     return is_array($data) ? $data : array();
+}
+
+/**
+ * Return the model id only if the account actually offers it; otherwise ''.
+ * Keeps dispatch resilient against a stale/invalid saved model id.
+ *
+ * @param string $model
+ * @return string
+ */
+function matrix_qc_agent_valid_model($model) {
+    if ($model === '') {
+        return '';
+    }
+    $models = matrix_qc_agent_models();
+    if (is_wp_error($models) || empty($models)) {
+        return $model;
+    }
+    foreach ($models as $m) {
+        if (isset($m['id']) && $m['id'] === $model) {
+            return $model;
+        }
+        if (!empty($m['aliases']) && is_array($m['aliases']) && in_array($model, $m['aliases'], true)) {
+            return $model;
+        }
+    }
+    if ((string) get_option('matrix_qc_agent_model', '') === $model) {
+        update_option('matrix_qc_agent_model', '');
+    }
+    return '';
 }
 
 /**

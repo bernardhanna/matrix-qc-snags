@@ -590,6 +590,10 @@ body.qc-picking * {
   padding: 10px 12px;
 }
 
+.qc-pop__body a.qc-meta {
+  display: block;
+}
+
 .qc-pop__title {
   margin: 0 0 4px;
   font-weight: 700;

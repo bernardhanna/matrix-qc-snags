@@ -634,6 +634,16 @@
       }));
     }
 
+    var pageHref = snag.page_url || snag.page_path;
+    if (pageHref) {
+      body.appendChild(el('a', {
+        class: 'qc-meta qc-link qc-pop__page',
+        href: pageHref,
+        target: '_blank',
+        text: 'Open flagged page \u2197' + (snag.page_path ? ' (' + snag.page_path + ')' : ''),
+      }));
+    }
+
     var commentsEl = el('div', { class: 'qc-comments' });
     renderComments(snag.id, commentsEl);
 

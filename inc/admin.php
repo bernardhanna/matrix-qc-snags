@@ -169,9 +169,19 @@ function matrix_qc_snag_list_assets() {
     echo '.wp-list-table tr.qc-row-fixed td.column-title a.row-title,.wp-list-table tr.qc-row-non_issue td.column-title a.row-title{text-decoration:line-through;opacity:.75}';
     echo '</style>';
 
+    $csv_url  = wp_nonce_url(admin_url('admin-post.php?action=matrix_qc_export'), 'matrix_qc_export');
+    $json_url = wp_nonce_url(admin_url('admin-post.php?action=matrix_qc_json&all=1'), 'matrix_qc_export');
+
     echo '<script>';
     echo '(function(){document.querySelectorAll(".wp-list-table tbody tr").forEach(function(tr){';
-    echo 'var p=tr.querySelector(".qc-pill[data-qc-status]");if(p){tr.classList.add("qc-row-"+p.getAttribute("data-qc-status"));}});})();';
+    echo 'var p=tr.querySelector(".qc-pill[data-qc-status]");if(p){tr.classList.add("qc-row-"+p.getAttribute("data-qc-status"));}});';
+    echo 'var h1=document.querySelector(".wrap h1.wp-heading-inline");';
+    echo 'if(h1&&!document.getElementById("qc-export-csv")){';
+    echo 'var ref=h1.parentNode.querySelector(".page-title-action");';
+    echo 'function add(id,href,label){var a=document.createElement("a");a.id=id;a.href=href;a.className="page-title-action";a.textContent=label;if(ref&&ref.parentNode){ref.parentNode.insertBefore(a,ref.nextSibling);ref=a;}else{h1.insertAdjacentElement("afterend",a);ref=a;}}';
+    echo 'add("qc-export-csv",' . wp_json_encode(esc_url_raw($csv_url)) . ',"Export CSV");';
+    echo 'add("qc-export-json",' . wp_json_encode(esc_url_raw($json_url)) . ',"Export JSON");';
+    echo '}})();';
     echo '</script>';
 }
 add_action('admin_footer-edit.php', 'matrix_qc_snag_list_assets');

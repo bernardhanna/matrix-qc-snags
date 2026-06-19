@@ -52,41 +52,88 @@ body.qc-on .qc-toolbar {
 .qc-btn {
   appearance: none;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  background: transparent;
+  background: rgba(255, 255, 255, 0.05);
   color: var(--qc-fg);
   padding: 6px 12px;
   border-radius: 7px;
   cursor: pointer;
   font-size: 13px;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease,
+    box-shadow 0.15s ease, transform 0.08s ease;
 }
 
 .qc-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.16);
+  border-color: rgba(255, 255, 255, 0.34);
+  transform: translateY(-1px);
+}
+
+.qc-btn:active {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+
+.qc-btn:focus-visible {
+  outline: 2px solid var(--qc-accent);
+  outline-offset: 2px;
 }
 
 .qc-btn--primary {
   background: var(--qc-accent);
   border-color: var(--qc-accent);
+  color: #fff;
 }
 
-.qc-btn--active {
+.qc-btn--primary:hover {
+  background: #2a63d6;
+  border-color: #2a63d6;
+  box-shadow: 0 4px 14px rgba(47, 111, 237, 0.4);
+}
+
+.qc-btn--active,
+.qc-btn--active:hover {
   background: var(--qc-high);
   border-color: var(--qc-high);
+  color: #fff;
+  box-shadow: 0 4px 14px rgba(224, 72, 63, 0.4);
 }
 
 .qc-btn--danger {
   border-color: var(--qc-high);
   color: var(--qc-high);
+  background: transparent;
 }
 
 .qc-btn--danger:hover {
   background: var(--qc-high);
+  border-color: var(--qc-high);
   color: #fff;
+  box-shadow: 0 4px 14px rgba(224, 72, 63, 0.34);
 }
 
 .qc-btn--sm {
   padding: 4px 9px;
   font-size: 12px;
+}
+
+/* Neutral buttons sitting on the light panels/popovers/cards: give them
+   readable text and a clear hover instead of inheriting the dark-toolbar look. */
+.qc-panel .qc-btn:not(.qc-btn--primary):not(.qc-btn--danger):not(.qc-btn--active),
+.qc-list .qc-btn:not(.qc-btn--primary):not(.qc-btn--danger):not(.qc-btn--active),
+.qc-popover .qc-btn:not(.qc-btn--primary):not(.qc-btn--danger):not(.qc-btn--active),
+.qc-compare .qc-btn:not(.qc-btn--primary):not(.qc-btn--danger):not(.qc-btn--active) {
+  color: #2b3340;
+  background: #fff;
+  border-color: #cfd4dc;
+}
+
+.qc-panel .qc-btn:not(.qc-btn--primary):not(.qc-btn--danger):not(.qc-btn--active):hover,
+.qc-list .qc-btn:not(.qc-btn--primary):not(.qc-btn--danger):not(.qc-btn--active):hover,
+.qc-popover .qc-btn:not(.qc-btn--primary):not(.qc-btn--danger):not(.qc-btn--active):hover,
+.qc-compare .qc-btn:not(.qc-btn--primary):not(.qc-btn--danger):not(.qc-btn--active):hover {
+  background: #eef2f8;
+  border-color: #9aa4b2;
+  box-shadow: 0 2px 8px rgba(20, 24, 31, 0.1);
 }
 
 .qc-hoverbox {
@@ -157,6 +204,17 @@ body.qc-picking * {
   cursor: pointer;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
   rotate: -45deg;
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+
+.qc-pin:hover {
+  transform: translate(-50%, -50%) scale(1.18);
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.5);
+}
+
+.qc-pin:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
 }
 
 .qc-pin > * {
@@ -335,6 +393,13 @@ body.qc-picking * {
 .qc-link {
   color: var(--qc-accent);
   text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 0.15s ease;
+}
+
+.qc-link:hover {
+  color: #1b4fc0;
+  text-decoration-thickness: 2px;
 }
 
 .qc-linkbtn {
@@ -343,10 +408,17 @@ body.qc-picking * {
   background: transparent;
   color: var(--qc-accent);
   text-decoration: underline;
+  text-underline-offset: 2px;
   cursor: pointer;
   padding: 0;
   font: inherit;
   font-size: 12px;
+  transition: color 0.15s ease;
+}
+
+.qc-linkbtn:hover {
+  color: #1b4fc0;
+  text-decoration-thickness: 2px;
 }
 
 .qc-x {
@@ -355,8 +427,18 @@ body.qc-picking * {
   background: transparent;
   font-size: 22px;
   line-height: 1;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
   cursor: pointer;
   color: #5a6473;
+  transition: color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+
+.qc-x:hover {
+  color: #14181f;
+  background: #eef2f8;
+  transform: rotate(90deg);
 }
 
 .qc-status-msg {

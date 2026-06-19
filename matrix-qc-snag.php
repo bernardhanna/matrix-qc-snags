@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Matrix QC Snag
  * Description: In-site QC snagging overlay. Reviewers pin snags per page (desktop/mobile) with screenshot, selector and Figma reference. Phase 1: capture + admin review. Later phases add content auto-fix and a coding-agent PR bridge.
- * Version: 0.3.0
+ * Version: 0.3.1
  * Author: Matrix
  */
 
@@ -10,7 +10,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('MATRIX_QC_SNAG_VERSION', '0.3.0');
+define('MATRIX_QC_SNAG_VERSION', '0.3.1');
 define('MATRIX_QC_SNAG_FILE', __FILE__);
 define('MATRIX_QC_SNAG_DIR', plugin_dir_path(__FILE__));
 define('MATRIX_QC_SNAG_URL', plugin_dir_url(__FILE__));

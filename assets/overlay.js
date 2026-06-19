@@ -31,6 +31,7 @@
     general: false,
     snags: [],
     pinsVisible: true,
+    listExpanded: {},
   };
 
   /* ---------- helpers ---------- */
@@ -596,14 +597,10 @@
     popover.setAttribute('aria-hidden', 'true');
   }
 
-  function openPopover(snag, index, clientX, clientY) {
-    popover.innerHTML = '';
-    popover.appendChild(el('div', { class: 'qc-pop__head' }, [
-      el('span', { class: 'qc-badge qc-badge--' + (snag.severity || 'medium'), text: String(index + 1) }),
-      el('strong', { text: typeLabel(snag.type) + ' \u00b7 ' + snag.viewport }),
-      el('button', { class: 'qc-x', text: '\u00d7', type: 'button' }),
-    ]));
-
+  // Build the shared snag detail (description, status, Figma link, comments,
+  // and actions). Used by both the pin popover and the inline list accordion.
+  function buildSnagDetail(snag, index, opts) {
+    opts = opts || {};
     var descView = el('p', { class: 'qc-pop__desc', text: snag.description || snag.title });
 
     var statusSel = el('select', { class: 'qc-input qc-input--sm' });
@@ -636,16 +633,14 @@
         text: snag.figma_element ? 'Open Figma element' : 'Open Figma page reference',
       }));
     }
-    popover.appendChild(body);
 
     var commentsEl = el('div', { class: 'qc-comments' });
-    popover.appendChild(commentsEl);
     renderComments(snag.id, commentsEl);
 
     var locate = el('button', { class: 'qc-btn qc-btn--sm', text: 'Locate', type: 'button' });
     var edit = el('button', { class: 'qc-btn qc-btn--sm', text: 'Edit', type: 'button' });
     var del = el('button', { class: 'qc-btn qc-btn--sm qc-btn--danger', text: 'Delete', type: 'button' });
-    popover.appendChild(el('div', { class: 'qc-pop__foot' }, [locate, edit, del]));
+    var foot = el('div', { class: 'qc-pop__foot' }, [locate, edit, del]);
 
     locate.addEventListener('click', function () {
       locateSnag(snag);
@@ -659,11 +654,30 @@
       }
       api('/snags/' + snag.id, 'DELETE').then(function () {
         state.snags.splice(index, 1);
-        closePopover();
+        delete state.listExpanded[snag.id];
+        if (opts.onDelete) {
+          opts.onDelete();
+        }
         renderPins();
         renderList();
       });
     });
+
+    return { body: body, comments: commentsEl, foot: foot };
+  }
+
+  function openPopover(snag, index, clientX, clientY) {
+    popover.innerHTML = '';
+    popover.appendChild(el('div', { class: 'qc-pop__head' }, [
+      el('span', { class: 'qc-badge qc-badge--' + (snag.severity || 'medium'), text: String(index + 1) }),
+      el('strong', { text: typeLabel(snag.type) + ' \u00b7 ' + snag.viewport }),
+      el('button', { class: 'qc-x', text: '\u00d7', type: 'button' }),
+    ]));
+
+    var detail = buildSnagDetail(snag, index, { onDelete: closePopover });
+    popover.appendChild(detail.body);
+    popover.appendChild(detail.comments);
+    popover.appendChild(detail.foot);
 
     popover.querySelector('.qc-x').addEventListener('click', closePopover);
 
@@ -788,6 +802,14 @@
 
   var listPanel = el('div', { class: 'qc-list', 'aria-hidden': 'true' });
 
+  // Populate an expanded list row with the shared snag detail.
+  function fillListDetail(detail, snag, index) {
+    var built = buildSnagDetail(snag, index);
+    detail.appendChild(built.body);
+    detail.appendChild(built.comments);
+    detail.appendChild(built.foot);
+  }
+
   function renderList() {
     var open = listPanel.classList.contains('is-open');
     listPanel.innerHTML = '';
@@ -811,17 +833,37 @@
     }
     state.snags.forEach(function (snag, i) {
       var prioTxt = snag.priority && parseInt(snag.priority, 10) > 0 ? 'P' + snag.priority + ' \u00b7 ' : '';
-      var item = el('div', { class: 'qc-list__item' }, [
+      var expanded = !!state.listExpanded[snag.id];
+
+      var header = el('div', { class: 'qc-list__item' }, [
         el('span', { class: 'qc-badge qc-badge--' + (snag.severity || 'medium'), text: String(i + 1) }),
         el('div', { class: 'qc-list__main' }, [
           el('p', { class: 'qc-list__desc', text: snag.description || snag.title }),
           el('p', { class: 'qc-meta', text: prioTxt + snag.viewport + ' \u00b7 ' + typeLabel(snag.type) + ' \u00b7 ' + statusLabel(snag.status || 'new') }),
         ]),
+        el('span', { class: 'qc-list__chev', text: '\u203a', 'aria-hidden': 'true' }),
       ]);
-      item.addEventListener('click', function () {
-        locateSnag(snag);
+      var detail = el('div', { class: 'qc-list__detail' });
+      var row = el('div', { class: 'qc-list__row' + (expanded ? ' is-open' : '') }, [header, detail]);
+
+      if (expanded) {
+        fillListDetail(detail, snag, i);
+      }
+
+      header.addEventListener('click', function () {
+        var willOpen = !row.classList.contains('is-open');
+        detail.innerHTML = '';
+        if (willOpen) {
+          state.listExpanded[snag.id] = true;
+          row.classList.add('is-open');
+          fillListDetail(detail, snag, i);
+        } else {
+          delete state.listExpanded[snag.id];
+          row.classList.remove('is-open');
+        }
       });
-      body.appendChild(item);
+
+      body.appendChild(row);
     });
     listPanel.appendChild(body);
     listPanel.querySelector('.qc-x').addEventListener('click', function () {

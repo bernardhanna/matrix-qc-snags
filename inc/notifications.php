@@ -278,9 +278,9 @@ function matrix_qc_weekly_report_build() {
     foreach ($enums['status'] as $s) {
         $by_status[$s] = 0;
     }
-    $ready     = array();
-    $high_open = array();
-    $week_ago  = time() - WEEK_IN_SECONDS;
+    $open_list     = array();
+    $resolved_list = array();
+    $week_ago      = time() - WEEK_IN_SECONDS;
 
     foreach ($query->posts as $post) {
         $d      = matrix_qc_snag_to_array($post);
@@ -289,21 +289,25 @@ function matrix_qc_weekly_report_build() {
         if (isset($by_status[$status])) {
             $by_status[$status]++;
         }
-        $open = matrix_qc_snag_is_open($status);
-        if ($open) {
+        if (matrix_qc_snag_is_open($status)) {
             $totals['open']++;
             if ($d['severity'] === 'high') {
                 $totals['high_open']++;
-                $high_open[] = $d;
             }
-        }
-        if ($status === 'ready_for_review') {
-            $ready[] = $d;
+            $open_list[] = $d;
+        } else {
+            $resolved_list[] = $d;
         }
         if (get_post_time('U', true, $post) >= $week_ago) {
             $totals['new_week']++;
         }
     }
+
+    // Open: most urgent first. Resolved: most recently raised first.
+    usort($open_list, 'matrix_qc_snag_priority_cmp');
+    usort($resolved_list, static function ($a, $b) {
+        return strcmp($b['created'], $a['created']);
+    });
 
     $site    = get_bloginfo('name');
     $subject = sprintf('[%s] QC snag report - %s', $site, date_i18n('j M Y, H:i'));
@@ -342,40 +346,82 @@ function matrix_qc_weekly_report_build() {
     }
     $h .= '</table>';
 
-    $h .= matrix_qc_report_snag_list('Ready for human review', $ready);
-    $h .= matrix_qc_report_snag_list('Open high-severity snags', $high_open);
+    $h .= matrix_qc_report_snag_table('Open snags', $open_list, false);
+    $h .= matrix_qc_report_snag_table('Resolved snags', $resolved_list, true);
 
     $h .= '<p style="margin:22px 0 0"><a href="' . esc_url($dash_url) . '" style="background:#2271b1;color:#fff;padding:9px 16px;border-radius:4px;text-decoration:none;font-size:13px">Open the QC dashboard</a></p>';
-    $h .= '<p style="color:#8c8f94;font-size:11px;margin:18px 0 0">Automated weekly report from the Matrix QC Snag plugin.</p>';
+    $h .= '<p style="color:#8c8f94;font-size:11px;margin:18px 0 0">Automated report from the Matrix QC Snag plugin.</p>';
     $h .= '</div>';
 
     return array('subject' => $subject, 'html' => $h);
 }
 
 /**
- * Render a small HTML list of snags for the report (capped at 15).
+ * Display name of whoever resolved a snag (or a dash when unknown / automated).
+ *
+ * @param int $snag_id
+ * @return string
+ */
+function matrix_qc_report_resolver_name($snag_id) {
+    $uid = (int) get_post_meta($snag_id, '_qc_resolved_by', true);
+    if ($uid) {
+        $user = get_userdata($uid);
+        if ($user) {
+            return $user->display_name;
+        }
+    }
+    return '—';
+}
+
+/**
+ * Render a detailed HTML table of snags for the report. Lists every snag with
+ * its page and status; the resolved table also shows who resolved it.
  *
  * @param string                          $heading
  * @param array<int,array<string,mixed>>  $snags
+ * @param bool                            $show_resolver
  * @return string
  */
-function matrix_qc_report_snag_list($heading, $snags) {
+function matrix_qc_report_snag_table($heading, $snags, $show_resolver) {
     if (empty($snags)) {
         return '';
     }
-    $snags = array_slice($snags, 0, 15);
-    $h     = '<h2 style="font-size:15px;margin:18px 0 8px">' . esc_html($heading) . ' (' . count($snags) . ')</h2>';
-    $h    .= '<ul style="margin:0;padding:0 0 0 18px;font-size:13px;line-height:1.5">';
-    foreach ($snags as $s) {
-        $label = $s['description'] !== '' ? wp_trim_words($s['description'], 14, '...') : $s['title'];
-        $page  = $s['page_url'] !== '' ? $s['page_url'] : ($s['page_path'] !== '' ? $s['page_path'] : '');
-        $h    .= '<li style="margin:0 0 4px">' . esc_html($label);
-        if ($page !== '') {
-            $h .= ' <span style="color:#646970">&middot; ' . esc_html($s['page_path']) . '</span>';
-        }
-        $h .= '</li>';
+
+    $th = 'text-align:left;padding:6px 8px;border-bottom:2px solid #dcdcde;font-size:12px;color:#646970';
+    $td = 'padding:6px 8px;border-bottom:1px solid #f0f0f1;font-size:13px;vertical-align:top';
+
+    $h  = '<h2 style="font-size:15px;margin:20px 0 8px">' . esc_html($heading) . ' (' . count($snags) . ')</h2>';
+    $h .= '<table role="presentation" style="border-collapse:collapse;width:100%">';
+    $h .= '<thead><tr>';
+    $h .= '<th style="' . $th . '">Snag</th>';
+    $h .= '<th style="' . $th . '">Page</th>';
+    $h .= '<th style="' . $th . '">Severity</th>';
+    $h .= '<th style="' . $th . '">Status</th>';
+    if ($show_resolver) {
+        $h .= '<th style="' . $th . '">Resolved by</th>';
     }
-    $h .= '</ul>';
+    $h .= '</tr></thead><tbody>';
+
+    foreach ($snags as $s) {
+        $label  = $s['description'] !== '' ? wp_trim_words($s['description'], 12, '...') : $s['title'];
+        $path   = $s['page_path'] !== '' ? $s['page_path'] : ($s['page_url'] !== '' ? $s['page_url'] : '—');
+        $page   = $s['page_url'] !== ''
+            ? '<a href="' . esc_url($s['page_url']) . '" style="color:#2271b1">' . esc_html($path) . '</a>'
+            : esc_html($path);
+        $status = matrix_qc_snag_status_label($s['status'] !== '' ? $s['status'] : 'new');
+
+        $h .= '<tr>';
+        $h .= '<td style="' . $td . '">' . esc_html($label) . '</td>';
+        $h .= '<td style="' . $td . '">' . $page . '</td>';
+        $h .= '<td style="' . $td . '">' . esc_html(ucfirst($s['severity'])) . '</td>';
+        $h .= '<td style="' . $td . '">' . esc_html($status) . '</td>';
+        if ($show_resolver) {
+            $h .= '<td style="' . $td . '">' . esc_html(matrix_qc_report_resolver_name($s['id'])) . '</td>';
+        }
+        $h .= '</tr>';
+    }
+
+    $h .= '</tbody></table>';
     return $h;
 }
 

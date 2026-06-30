@@ -244,18 +244,31 @@ function matrix_qc_report_first_run($freq) {
 }
 
 /**
- * Send the weekly report to the configured recipients.
+ * Send the report to the configured (or supplied) recipients. Each recipient
+ * gets their own email so all addresses receive it and none are exposed to the
+ * others.
  *
- * @return bool
+ * @param string[]|null $recipients Optional explicit recipient list.
+ * @return int Number of recipients successfully sent to.
  */
-function matrix_qc_weekly_report_send() {
-    $recipients = matrix_qc_report_recipients();
-    if (empty($recipients)) {
-        return false;
+function matrix_qc_weekly_report_send($recipients = null) {
+    if (!is_array($recipients)) {
+        $recipients = matrix_qc_report_recipients();
     }
+    if (empty($recipients)) {
+        return 0;
+    }
+
     $report  = matrix_qc_weekly_report_build();
     $headers = array('Content-Type: text/html; charset=UTF-8');
-    return wp_mail($recipients, $report['subject'], $report['html'], $headers);
+
+    $sent = 0;
+    foreach ($recipients as $to) {
+        if (wp_mail($to, $report['subject'], $report['html'], $headers)) {
+            $sent++;
+        }
+    }
+    return $sent;
 }
 add_action(MATRIX_QC_WEEKLY_REPORT_HOOK, 'matrix_qc_weekly_report_send');
 
@@ -465,13 +478,30 @@ function matrix_qc_notifications_settings_page() {
 
     if (isset($_POST['matrix_qc_report_test']) &&
         check_admin_referer('matrix_qc_notify_settings', 'matrix_qc_notify_nonce')) {
-        if (empty(matrix_qc_report_recipients())) {
+        // Use whatever is currently typed in the form so a test can be sent
+        // without saving first, and so every address is exercised.
+        $test_recipients = matrix_qc_parse_emails(
+            sanitize_textarea_field(wp_unslash($_POST['matrix_qc_report_recipients'] ?? ''))
+        );
+        if (empty($test_recipients)) {
+            $test_recipients = matrix_qc_report_recipients();
+        }
+        if (empty($test_recipients)) {
             echo '<div class="notice notice-warning"><p>Add at least one valid report recipient first.</p></div>';
         } else {
-            $sent = matrix_qc_weekly_report_send();
-            echo '<div class="notice notice-' . ($sent ? 'success' : 'error') . '"><p>'
-                . ($sent ? 'Test report sent to the configured recipients.' : 'Could not send the test report (check mail configuration).')
-                . '</p></div>';
+            $sent  = matrix_qc_weekly_report_send($test_recipients);
+            $total = count($test_recipients);
+            if ($sent === $total) {
+                echo '<div class="notice notice-success"><p>'
+                    . sprintf('Test report sent to %d recipient(s): %s', $sent, esc_html(implode(', ', $test_recipients)))
+                    . '</p></div>';
+            } elseif ($sent > 0) {
+                echo '<div class="notice notice-warning"><p>'
+                    . sprintf('Test report sent to %d of %d recipient(s). Check the mail configuration for the rest.', $sent, $total)
+                    . '</p></div>';
+            } else {
+                echo '<div class="notice notice-error"><p>Could not send the test report (check mail configuration).</p></div>';
+            }
         }
     }
 

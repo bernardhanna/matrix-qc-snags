@@ -11,6 +11,8 @@
   --qc-st-review_required: #0aa2c0;
   --qc-st-in_progress: #2f6fed;
   --qc-st-pr_open: #8a5cf6;
+  --qc-st-pr_merged: #8250df;
+  --qc-st-ready_for_review: #db2777;
   --qc-st-fixed: #3bb273;
   --qc-st-reverted: #6b7280;
   --qc-st-non_issue: #6b7280;
@@ -230,6 +232,8 @@ body.qc-picking * {
 .qc-pin--status-review_required { background: var(--qc-st-review_required); }
 .qc-pin--status-in_progress { background: var(--qc-st-in_progress); }
 .qc-pin--status-pr_open { background: var(--qc-st-pr_open); }
+.qc-pin--status-pr_merged { background: var(--qc-st-pr_merged); opacity: 0.7; }
+.qc-pin--status-ready_for_review { background: var(--qc-st-ready_for_review); }
 .qc-pin--status-fixed { background: var(--qc-st-fixed); opacity: 0.55; }
 .qc-pin--status-reverted { background: var(--qc-st-reverted); opacity: 0.55; }
 .qc-pin--status-non_issue { background: var(--qc-st-non_issue); opacity: 0.45; }

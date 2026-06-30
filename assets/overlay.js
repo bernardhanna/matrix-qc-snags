@@ -67,6 +67,16 @@
     return window.innerWidth <= cfg.mobileMax ? 'mobile' : 'desktop';
   }
 
+  // Snag id from a ?qc_snag=<id> deep link (used by comment notification emails).
+  function deepLinkSnagId() {
+    try {
+      var v = new URLSearchParams(window.location.search).get('qc_snag');
+      return v && /^\d+$/.test(v) ? v : null;
+    } catch (e) {
+      return null;
+    }
+  }
+
   var TYPE_LABELS = {
     frontend: 'Frontend',
     functionality: 'Functionality',
@@ -90,6 +100,8 @@
     review_required: 'Review required',
     in_progress: 'In progress',
     pr_open: 'PR open',
+    pr_merged: 'Pull request successfully merged and closed',
+    ready_for_review: 'Ready for Human Review',
     fixed: 'Fixed',
     reverted: 'Reverted',
     non_issue: 'Non-issue',
@@ -97,6 +109,12 @@
 
   function statusLabel(s) {
     return STATUS_LABELS[s] || (s ? s.replace(/_/g, ' ') : '');
+  }
+
+  var RESOLVED_STATUSES = ['pr_merged', 'ready_for_review', 'fixed', 'reverted', 'non_issue'];
+
+  function isResolvedStatus(s) {
+    return RESOLVED_STATUSES.indexOf(s) !== -1;
   }
 
   // Auto-generated titles start with "[VIEWPORT] ..."; treat those as "no custom title".
@@ -117,6 +135,40 @@
     } catch (e) {
       return url;
     }
+  }
+
+  // Pull a clean Figma URL out of pasted text. Figma's "Copy example prompt"
+  // wraps the link in "Implement this design from Figma.\n@<url>", so strip
+  // any surrounding prose and keep just the figma.com URL.
+  function cleanFigmaValue(raw) {
+    var s = (raw == null ? '' : String(raw)).trim();
+    var m = s.match(/https?:\/\/[^\s]*figma\.com\/[^\s]+/i);
+    if (m) {
+      return m[0].trim();
+    }
+    return s.replace(/^@+/, '').trim();
+  }
+
+  // Clean prompt-wrapped Figma links as they're pasted into an input.
+  function bindFigmaInput(input) {
+    input.addEventListener('paste', function (e) {
+      var cd = e.clipboardData || window.clipboardData;
+      if (!cd) {
+        return;
+      }
+      var text = cd.getData('text');
+      if (!text) {
+        return;
+      }
+      var cleaned = cleanFigmaValue(text);
+      if (cleaned !== text.trim()) {
+        e.preventDefault();
+        input.value = cleaned;
+      }
+    });
+    input.addEventListener('blur', function () {
+      input.value = cleanFigmaValue(input.value);
+    });
   }
 
   // Detect auto-generated ids like "partners-<uuid>" or "stories-<uniqid>".
@@ -436,6 +488,7 @@
       type: 'url',
       placeholder: 'https://figma.com/design/...?node-id=...',
     });
+    bindFigmaInput(figmaInput);
 
     panel.appendChild(el('div', { class: 'qc-panel__body' }, [
       el('label', { class: 'qc-label', text: 'Title (optional)' }),
@@ -652,6 +705,31 @@
     var del = el('button', { class: 'qc-btn qc-btn--sm qc-btn--danger', text: 'Delete', type: 'button' });
     var foot = el('div', { class: 'qc-pop__foot' }, [locate, edit, del]);
 
+    if (isResolvedStatus(snag.status)) {
+      var reopen = el('button', { class: 'qc-btn qc-btn--sm', text: 'Reopen', type: 'button' });
+      reopen.addEventListener('click', function () {
+        if (!window.confirm('Reopen this snag and notify whoever resolved it?')) {
+          return;
+        }
+        reopen.disabled = true;
+        api('/snags/' + snag.id + '/reopen', 'POST', {}).then(function (res) {
+          if (res && res.snag) {
+            state.snags[index] = res.snag;
+            renderPins();
+            renderList();
+            if (opts.onDelete) {
+              opts.onDelete();
+            }
+          } else {
+            reopen.disabled = false;
+          }
+        }).catch(function () {
+          reopen.disabled = false;
+        });
+      });
+      foot.appendChild(reopen);
+    }
+
     locate.addEventListener('click', function () {
       locateSnag(snag);
     });
@@ -718,6 +796,7 @@
       type: 'url',
       placeholder: 'Figma element link (node-id=...)',
     });
+    bindFigmaInput(figmaInput);
     figmaInput.value = snag.figma_element || '';
     var prio = el('input', { class: 'qc-input qc-input--sm', type: 'number', min: '0', max: '99', placeholder: 'Priority (1 = highest)' });
     prio.value = snag.priority && parseInt(snag.priority, 10) > 0 ? snag.priority : '';
@@ -1239,6 +1318,31 @@
       .catch(function () {});
   }
 
+  // Open a specific snag's popover once snags have loaded. Used when arriving
+  // via a ?qc_snag=<id> deep link from a comment notification email.
+  function openDeepLinkSnag(id) {
+    var attempts = 0;
+    function attempt() {
+      if (!state.loaded && attempts++ < 50) {
+        return window.setTimeout(attempt, 100);
+      }
+      var idx = -1;
+      for (var i = 0; i < state.snags.length; i++) {
+        if (String(state.snags[i].id) === String(id)) {
+          idx = i;
+          break;
+        }
+      }
+      if (idx === -1) {
+        return;
+      }
+      var x = Math.max(20, Math.round(window.innerWidth / 2 - 140));
+      openPopover(state.snags[idx], idx, x, 90);
+      locateSnag(state.snags[idx]);
+    }
+    attempt();
+  }
+
   function updateToggleLabel() {
     var label = document.querySelector('[data-qc-toggle-label]');
     if (label) {
@@ -1336,6 +1440,13 @@
       setEnabled(stored === '1', false);
     } else {
       setEnabled(true, false);
+    }
+
+    // A comment-notification deep link forces QC mode on and opens the snag.
+    var deepId = deepLinkSnagId();
+    if (deepId) {
+      setEnabled(true, false);
+      openDeepLinkSnag(deepId);
     }
   }
 

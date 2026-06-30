@@ -140,6 +140,11 @@ function matrix_qc_snag_clean_figma_value($value) {
 function matrix_qc_snag_parse_figma_url($url) {
     $out = array('url' => '', 'file_key' => '', 'node_id' => '');
     $url = trim((string) $url);
+    // Figma's "Copy example prompt" wraps the link in surrounding prose
+    // ("Implement this design from Figma.\n@<url>"); keep only the URL.
+    if (preg_match('#https?://[^\s]*figma\.com/[^\s]+#i', $url, $um)) {
+        $url = $um[0];
+    }
     if ($url === '' || strpos($url, 'figma.com') === false) {
         return $out;
     }

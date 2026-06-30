@@ -42,6 +42,12 @@ function matrix_qc_snag_register_rest() {
         ),
     ));
 
+    register_rest_route(MATRIX_QC_SNAG_REST_NS, '/snags/(?P<id>\d+)/reopen', array(
+        'methods'             => WP_REST_Server::CREATABLE,
+        'callback'            => 'matrix_qc_snag_rest_reopen',
+        'permission_callback' => 'matrix_qc_snag_user_can_review',
+    ));
+
     register_rest_route(MATRIX_QC_SNAG_REST_NS, '/snags/(?P<id>\d+)/comments', array(
         array(
             'methods'             => WP_REST_Server::READABLE,
@@ -130,6 +136,7 @@ function matrix_qc_snag_rest_create($request) {
         'post_status'  => 'publish',
         'post_title'   => $title,
         'post_content' => $description,
+        'post_author'  => get_current_user_id(),
     ), true);
 
     if (is_wp_error($post_id)) {
@@ -340,10 +347,253 @@ function matrix_qc_snag_rest_add_comment($request) {
         return new WP_Error('insert_failed', 'Could not save comment', array('status' => 500));
     }
 
+    $comment = get_comment($comment_id);
+    matrix_qc_snag_notify_comment($post, $comment, $user);
+
     return rest_ensure_response(array(
         'ok'      => true,
-        'comment' => matrix_qc_snag_comment_to_array(get_comment($comment_id)),
+        'comment' => matrix_qc_snag_comment_to_array($comment),
     ));
+}
+
+/**
+ * Notify the snag's original author (and any prior thread participants) that a
+ * new comment was added, with a link to log in and reply on the page itself.
+ *
+ * The commenter is never notified about their own comment.
+ *
+ * @param WP_Post    $post      The snag the comment belongs to.
+ * @param WP_Comment $comment   The newly inserted comment.
+ * @param WP_User    $commenter The user who left the comment.
+ */
+function matrix_qc_snag_notify_comment($post, $comment, $commenter) {
+    if (!$post || !$comment) {
+        return;
+    }
+
+    // Recipients keyed by lowercase email so we de-dupe naturally.
+    $recipients = array();
+
+    $author_id = (int) $post->post_author;
+    if ($author_id) {
+        $author = get_userdata($author_id);
+        if ($author && is_email($author->user_email)) {
+            $recipients[strtolower($author->user_email)] = true;
+        }
+    }
+
+    // Loop in anyone who already took part in this snag's thread.
+    $prior = get_comments(array(
+        'post_id' => $post->ID,
+        'type'    => 'qc_comment',
+        'status'  => 'approve',
+    ));
+    foreach ($prior as $c) {
+        $email = strtolower((string) $c->comment_author_email);
+        if ($email !== '' && is_email($email)) {
+            $recipients[$email] = true;
+        }
+    }
+
+    // Never email the person who just commented.
+    $commenter_email = strtolower((string) $comment->comment_author_email);
+    if ($commenter_email !== '') {
+        unset($recipients[$commenter_email]);
+    }
+    if ($commenter && is_email($commenter->user_email)) {
+        unset($recipients[strtolower($commenter->user_email)]);
+    }
+
+    $recipients = apply_filters(
+        'matrix_qc_snag_comment_recipients',
+        array_keys($recipients),
+        $post,
+        $comment,
+        $commenter
+    );
+    if (empty($recipients)) {
+        return;
+    }
+
+    $page_url = (string) get_post_meta($post->ID, '_qc_page_url', true);
+    if ($page_url === '') {
+        $page_url = home_url('/');
+    }
+    // Deep link opens the snag in the overlay; login wrapper forces auth first
+    // and returns the user to the snag afterwards.
+    $deep_link  = add_query_arg('qc_snag', (int) $post->ID, $page_url);
+    $reply_link = wp_login_url($deep_link);
+    $edit_link  = get_edit_post_link($post->ID, 'raw');
+
+    $title        = get_the_title($post);
+    $commenter_nm = $comment->comment_author !== ''
+        ? $comment->comment_author
+        : ($commenter ? $commenter->display_name : 'Someone');
+
+    $subject = sprintf('[%s] New comment on QC snag: %s', get_bloginfo('name'), $title);
+
+    $lines   = array();
+    $lines[] = sprintf('%s added a comment to a snag you raised:', $commenter_nm);
+    $lines[] = '';
+    $lines[] = 'Snag: ' . $title;
+    $lines[] = 'Page: ' . $page_url;
+    $lines[] = '';
+    $lines[] = 'Comment:';
+    $lines[] = wp_strip_all_tags($comment->comment_content);
+    $lines[] = '';
+    $lines[] = 'Log in and reply on the page:';
+    $lines[] = $reply_link;
+    if ($edit_link) {
+        $lines[] = '';
+        $lines[] = 'Or review it in the dashboard:';
+        $lines[] = $edit_link;
+    }
+    $message = implode("\n", $lines);
+
+    $subject = apply_filters('matrix_qc_snag_comment_subject', $subject, $post, $comment);
+    $message = apply_filters('matrix_qc_snag_comment_message', $message, $post, $comment, $reply_link);
+
+    wp_mail($recipients, $subject, $message, matrix_qc_notify_cc_headers());
+}
+
+/**
+ * REST: reopen a snag (send it back to the open queue) and notify whoever
+ * marked it resolved.
+ *
+ * @param WP_REST_Request $request
+ * @return WP_REST_Response|WP_Error
+ */
+function matrix_qc_snag_rest_reopen($request) {
+    $id   = absint($request['id']);
+    $post = get_post($id);
+    if (!$post || $post->post_type !== MATRIX_QC_SNAG_CPT) {
+        return new WP_Error('not_found', 'Snag not found', array('status' => 404));
+    }
+
+    $note = sanitize_textarea_field((string) $request->get_param('note'));
+    $res  = matrix_qc_snag_reopen($id, wp_get_current_user(), $note);
+    if (is_wp_error($res)) {
+        return $res;
+    }
+
+    return rest_ensure_response(array(
+        'ok'   => true,
+        'snag' => matrix_qc_snag_to_array(get_post($id)),
+    ));
+}
+
+/**
+ * Reopen a resolved snag: move it back to "Triaged", log it, and email the
+ * person who resolved it (falling back to the original reporter).
+ *
+ * @param int     $id
+ * @param WP_User $actor The user performing the reopen.
+ * @param string  $note  Optional reason to include in the notification.
+ * @return true|WP_Error
+ */
+function matrix_qc_snag_reopen($id, $actor, $note = '') {
+    $post = get_post($id);
+    if (!$post || $post->post_type !== MATRIX_QC_SNAG_CPT) {
+        return new WP_Error('not_found', 'Snag not found', array('status' => 404));
+    }
+
+    $prev        = (string) get_post_meta($id, '_qc_status', true);
+    $actor_name  = ($actor && $actor->exists()) ? $actor->display_name : 'Someone';
+
+    update_post_meta($id, '_qc_status', 'triaged');
+
+    $comment = sprintf('Reopened by %s (was: %s).', $actor_name, matrix_qc_snag_status_label($prev !== '' ? $prev : 'new'));
+    if ($note !== '') {
+        $comment .= ' Reason: ' . $note;
+    }
+    matrix_qc_snag_add_system_comment($id, $comment);
+
+    matrix_qc_snag_notify_reopened($post, $prev, $actor, $note);
+
+    // Clear the recorded resolver; the next resolution will set a fresh one.
+    delete_post_meta($id, '_qc_resolved_by');
+
+    return true;
+}
+
+/**
+ * Email the person who resolved a snag that it has been reopened. Falls back to
+ * the original reporter when no human resolver is on record (e.g. an automated
+ * merge). The user performing the reopen is never emailed.
+ *
+ * @param WP_Post $post
+ * @param string  $prev_status
+ * @param WP_User $actor
+ * @param string  $note
+ */
+function matrix_qc_snag_notify_reopened($post, $prev_status, $actor, $note = '') {
+    $recipients = array();
+
+    $resolver_id = (int) get_post_meta($post->ID, '_qc_resolved_by', true);
+    if ($resolver_id) {
+        $resolver = get_userdata($resolver_id);
+        if ($resolver && is_email($resolver->user_email)) {
+            $recipients[strtolower($resolver->user_email)] = true;
+        }
+    }
+
+    if (empty($recipients)) {
+        $author = get_userdata((int) $post->post_author);
+        if ($author && is_email($author->user_email)) {
+            $recipients[strtolower($author->user_email)] = true;
+        }
+    }
+
+    if ($actor && is_email($actor->user_email)) {
+        unset($recipients[strtolower($actor->user_email)]);
+    }
+
+    $recipients = apply_filters('matrix_qc_snag_reopen_recipients', array_keys($recipients), $post, $actor);
+    if (empty($recipients)) {
+        return;
+    }
+
+    $page_url = (string) get_post_meta($post->ID, '_qc_page_url', true);
+    if ($page_url === '') {
+        $page_url = home_url('/');
+    }
+    $deep_link  = add_query_arg('qc_snag', (int) $post->ID, $page_url);
+    $reply_link = wp_login_url($deep_link);
+    $edit_link  = get_edit_post_link($post->ID, 'raw');
+    $pr_url     = (string) get_post_meta($post->ID, '_qc_pr_url', true);
+
+    $title      = get_the_title($post);
+    $actor_name = ($actor && $actor->exists()) ? $actor->display_name : 'Someone';
+
+    $subject = sprintf('[%s] QC snag reopened: %s', get_bloginfo('name'), $title);
+
+    $lines   = array();
+    $lines[] = sprintf('%s reopened a snag that was previously marked "%s".', $actor_name, matrix_qc_snag_status_label($prev_status !== '' ? $prev_status : 'new'));
+    $lines[] = '';
+    $lines[] = 'Snag: ' . $title;
+    $lines[] = 'Page: ' . $page_url;
+    if ($pr_url !== '') {
+        $lines[] = 'Previous PR: ' . $pr_url;
+    }
+    if ($note !== '') {
+        $lines[] = '';
+        $lines[] = 'Reason given:';
+        $lines[] = $note;
+    }
+    $lines[] = '';
+    $lines[] = 'Open it to take another look:';
+    $lines[] = $reply_link;
+    if ($edit_link) {
+        $lines[] = '';
+        $lines[] = 'Or in the dashboard:';
+        $lines[] = $edit_link;
+    }
+    $message = implode("\n", $lines);
+
+    $subject = apply_filters('matrix_qc_snag_reopen_subject', $subject, $post, $actor);
+    $message = apply_filters('matrix_qc_snag_reopen_message', $message, $post, $actor, $reply_link);
+
+    wp_mail($recipients, $subject, $message, matrix_qc_notify_cc_headers());
 }
 
 /**

@@ -294,6 +294,29 @@ function matrix_qc_agent_extract_pr($info) {
 }
 
 /**
+ * Extract the agent's pushed branch name from its record, if any.
+ *
+ * @param array<string,mixed> $info
+ * @return string
+ */
+function matrix_qc_agent_extract_branch($info) {
+    if (!empty($info['target']['branchName'])) {
+        return (string) $info['target']['branchName'];
+    }
+    if (!empty($info['git']['branches']) && is_array($info['git']['branches'])) {
+        foreach ($info['git']['branches'] as $branch) {
+            if (!empty($branch['branch'])) {
+                return (string) $branch['branch'];
+            }
+            if (!empty($branch['name'])) {
+                return (string) $branch['name'];
+            }
+        }
+    }
+    return '';
+}
+
+/**
  * Build the prompt for a single snag.
  *
  * @param array<string,mixed> $snag
@@ -440,12 +463,22 @@ function matrix_qc_agent_repositories() {
 }
 
 /**
- * Poll in-progress agents and capture PR URLs.
+ * Cron entry point: pull fresh state from Cursor and GitHub.
  */
 function matrix_qc_agent_poll() {
-    if (!matrix_qc_agent_ready()) {
-        return;
+    if (matrix_qc_agent_ready()) {
+        matrix_qc_agent_poll_cursor();
     }
+    // GitHub sync runs independently of the Cursor key so manually-opened PRs
+    // (and merges) are reflected too.
+    matrix_qc_github_poll();
+}
+add_action(MATRIX_QC_AGENT_CRON, 'matrix_qc_agent_poll');
+
+/**
+ * Poll in-progress Cursor agents and capture their branch + PR URL.
+ */
+function matrix_qc_agent_poll_cursor() {
     $query = new WP_Query(array(
         'post_type'      => MATRIX_QC_SNAG_CPT,
         'post_status'    => 'publish',
@@ -471,9 +504,13 @@ function matrix_qc_agent_poll() {
         if (is_wp_error($info)) {
             continue;
         }
-        $pr = matrix_qc_agent_extract_pr($info);
-        if ($pr !== '') {
-            foreach ($ids as $sid) {
+        $branch = matrix_qc_agent_extract_branch($info);
+        $pr     = matrix_qc_agent_extract_pr($info);
+        foreach ($ids as $sid) {
+            if ($branch !== '') {
+                update_post_meta($sid, '_qc_agent_branch', $branch);
+            }
+            if ($pr !== '') {
                 $prev = (string) get_post_meta($sid, '_qc_pr_url', true);
                 update_post_meta($sid, '_qc_pr_url', $pr);
                 update_post_meta($sid, '_qc_status', 'pr_open');
@@ -484,7 +521,6 @@ function matrix_qc_agent_poll() {
         }
     }
 }
-add_action(MATRIX_QC_AGENT_CRON, 'matrix_qc_agent_poll');
 
 /**
  * Add a 5-minute cron interval.
@@ -587,40 +623,87 @@ function matrix_qc_agent_handle_check() {
     }
     check_admin_referer('matrix_qc_agent_dispatch');
     $id  = isset($_GET['snag']) ? absint($_GET['snag']) : 0;
-    $aid = $id ? get_post_meta($id, '_qc_agent_id', true) : '';
+    $aid = $id ? (string) get_post_meta($id, '_qc_agent_id', true) : '';
 
-    if ($aid === '') {
-        matrix_qc_agent_redirect_with_notice(get_edit_post_link($id, 'url'), 'No agent has been dispatched for this snag yet.');
-    }
+    $messages     = array();
+    $agent_status = '';
 
-    $info = matrix_qc_agent_get($aid);
-    if (is_wp_error($info)) {
-        matrix_qc_agent_redirect_with_notice(get_edit_post_link($id, 'url'), 'Check failed: ' . $info->get_error_message());
-    }
-
-    $agent_status = isset($info['status']) ? (string) $info['status'] : 'unknown';
-    $pr           = matrix_qc_agent_extract_pr($info);
-    if ($pr !== '') {
-        $prev = (string) get_post_meta($id, '_qc_pr_url', true);
-        update_post_meta($id, '_qc_pr_url', $pr);
-        update_post_meta($id, '_qc_status', 'pr_open');
-        if ($prev !== $pr) {
-            matrix_qc_snag_add_system_comment($id, 'Pull request opened: ' . $pr);
+    // 1) Ask Cursor for the latest agent record (branch + PR), if dispatched.
+    if ($aid !== '') {
+        $info = matrix_qc_agent_get($aid);
+        if (is_wp_error($info)) {
+            $messages[] = 'Agent check failed: ' . $info->get_error_message();
+        } else {
+            $agent_status = isset($info['status']) ? (string) $info['status'] : 'unknown';
+            $branch       = matrix_qc_agent_extract_branch($info);
+            if ($branch !== '') {
+                update_post_meta($id, '_qc_agent_branch', $branch);
+            }
+            $pr = matrix_qc_agent_extract_pr($info);
+            if ($pr !== '') {
+                $prev = (string) get_post_meta($id, '_qc_pr_url', true);
+                update_post_meta($id, '_qc_pr_url', $pr);
+                if ((string) get_post_meta($id, '_qc_status', true) === 'in_progress') {
+                    update_post_meta($id, '_qc_status', 'pr_open');
+                }
+                if ($prev !== $pr) {
+                    matrix_qc_snag_add_system_comment($id, 'Pull request opened: ' . $pr);
+                }
+            }
         }
-        matrix_qc_agent_redirect_with_notice(get_edit_post_link($id, 'url'), 'Agent ' . $agent_status . '. PR opened: ' . $pr);
     }
 
-    $branch = '';
-    if (!empty($info['git']['branches'][0]['branch'])) {
-        $branch = (string) $info['git']['branches'][0]['branch'];
+    // 2) Pull live PR state from GitHub (merged/closed) for the recorded PR.
+    $sync = matrix_qc_github_sync_snag($id);
+    if (is_wp_error($sync)) {
+        $messages[] = 'GitHub check failed: ' . $sync->get_error_message();
     }
-    $suffix = $branch !== '' ? ' Branch pushed: ' . $branch . ' (no PR opened yet).' : ' No branch pushed yet.';
-    matrix_qc_agent_redirect_with_notice(
-        get_edit_post_link($id, 'url'),
-        'Agent status: ' . $agent_status . '.' . $suffix
-    );
+    matrix_qc_snag_flush_review_notifications();
+
+    $status = (string) get_post_meta($id, '_qc_status', true);
+    $pr_url = (string) get_post_meta($id, '_qc_pr_url', true);
+
+    $summary = 'Status: ' . matrix_qc_snag_status_label($status) . '.';
+    if ($agent_status !== '') {
+        $summary .= ' Agent: ' . $agent_status . '.';
+    }
+    if ($pr_url !== '') {
+        $summary .= ' PR: ' . $pr_url;
+    } elseif ($aid === '') {
+        $summary .= ' No agent dispatched and no PR URL recorded - add one to sync from GitHub.';
+    }
+    if (!empty($messages)) {
+        $summary .= ' (' . implode(' ', $messages) . ')';
+    }
+
+    matrix_qc_agent_redirect_with_notice(get_edit_post_link($id, 'url'), $summary);
 }
 add_action('admin_post_matrix_qc_agent_check', 'matrix_qc_agent_handle_check');
+
+/**
+ * admin-post: sync a single snag's status from GitHub (for manual PRs).
+ */
+function matrix_qc_agent_handle_github_sync() {
+    if (!current_user_can(MATRIX_QC_SNAG_CAP)) {
+        wp_die('Forbidden');
+    }
+    check_admin_referer('matrix_qc_agent_dispatch');
+    $id = isset($_GET['snag']) ? absint($_GET['snag']) : 0;
+
+    matrix_qc_agent_ensure_cron();
+    $sync = matrix_qc_github_sync_snag($id);
+    matrix_qc_snag_flush_review_notifications();
+
+    if (is_wp_error($sync)) {
+        $message = 'GitHub sync failed: ' . $sync->get_error_message();
+    } elseif ($sync === false) {
+        $message = 'Nothing to sync yet - add the PR URL on this snag first (or dispatch the agent).';
+    } else {
+        $message = 'Synced from GitHub. Status: ' . matrix_qc_snag_status_label((string) get_post_meta($id, '_qc_status', true)) . '.';
+    }
+    matrix_qc_agent_redirect_with_notice(get_edit_post_link($id, 'url'), $message);
+}
+add_action('admin_post_matrix_qc_agent_github_sync', 'matrix_qc_agent_handle_github_sync');
 
 /**
  * admin-post: dispatch all open snags as one batch.
@@ -904,6 +987,7 @@ function matrix_qc_agent_settings_page() {
     if (isset($_POST['matrix_qc_agent_save']) &&
         check_admin_referer('matrix_qc_agent_settings', 'matrix_qc_agent_settings_nonce')) {
         update_option('matrix_qc_agent_api_key', sanitize_text_field(wp_unslash($_POST['matrix_qc_agent_api_key'] ?? '')));
+        update_option('matrix_qc_agent_github_token', sanitize_text_field(wp_unslash($_POST['matrix_qc_agent_github_token'] ?? '')));
         update_option('matrix_qc_agent_repo', esc_url_raw(wp_unslash($_POST['matrix_qc_agent_repo'] ?? '')));
         update_option('matrix_qc_agent_ref', sanitize_text_field(wp_unslash($_POST['matrix_qc_agent_ref'] ?? 'main')));
         update_option('matrix_qc_agent_model', sanitize_text_field(wp_unslash($_POST['matrix_qc_agent_model'] ?? '')));
@@ -965,6 +1049,10 @@ function matrix_qc_agent_settings_page() {
     printf(
         '<tr><th><label>Cursor API key</label></th><td><input type="password" name="matrix_qc_agent_api_key" value="%s" class="regular-text" autocomplete="off" /><p class="description">Create an Integrations API key in the Cursor dashboard. Stored in the WP database, never in git.</p></td></tr>',
         esc_attr($cfg['api_key'])
+    );
+    printf(
+        '<tr><th><label>GitHub token</label></th><td><input type="password" name="matrix_qc_agent_github_token" value="%s" class="regular-text" autocomplete="off" /><p class="description">Personal access token used to read PR status from GitHub (merged / closed) so snags auto-advance to Fixed. Needs read access to the repo (classic: <code>repo</code> scope; fine-grained: Pull requests &rarr; Read). Leave blank for public repos.</p></td></tr>',
+        esc_attr((string) get_option('matrix_qc_agent_github_token', ''))
     );
     printf(
         '<tr><th><label>Repository URL</label></th><td><input type="url" name="matrix_qc_agent_repo" value="%s" class="regular-text" /></td></tr>',

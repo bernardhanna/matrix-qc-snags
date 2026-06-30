@@ -47,7 +47,7 @@ function matrix_qc_snag_enums() {
     return array(
         'type'     => array('frontend', 'functionality', 'backend', 'content', 'asset', 'accessibility', 'performance', 'seo', 'other'),
         'severity' => array('low', 'medium', 'high'),
-        'status'   => array('new', 'triaged', 'review_required', 'in_progress', 'pr_open', 'fixed', 'reverted', 'non_issue'),
+        'status'   => array('new', 'triaged', 'review_required', 'in_progress', 'pr_open', 'pr_merged', 'ready_for_review', 'fixed', 'reverted', 'non_issue'),
         'viewport' => array('desktop', 'mobile'),
     );
 }
@@ -87,6 +87,8 @@ function matrix_qc_snag_status_label($status) {
         'review_required' => 'Review required',
         'in_progress'     => 'In progress',
         'pr_open'         => 'PR open',
+        'pr_merged'       => 'Pull request successfully merged and closed',
+        'ready_for_review' => 'Ready for Human Review',
         'fixed'           => 'Fixed',
         'reverted'        => 'Reverted',
         'non_issue'       => 'Non-issue',
@@ -161,6 +163,48 @@ function matrix_qc_snag_register_cpt() {
     ));
 }
 add_action('init', 'matrix_qc_snag_register_cpt');
+
+/**
+ * Statuses that represent a closed / resolved snag (a fix landed, was merged,
+ * reverted, or dismissed). Used for reopen controls and resolver tracking.
+ *
+ * @return string[]
+ */
+function matrix_qc_snag_resolved_statuses() {
+    return array('pr_merged', 'ready_for_review', 'fixed', 'reverted', 'non_issue');
+}
+
+/**
+ * Whether a status counts as resolved/closed.
+ *
+ * @param string $status
+ * @return bool
+ */
+function matrix_qc_snag_is_resolved_status($status) {
+    return in_array($status, matrix_qc_snag_resolved_statuses(), true);
+}
+
+/**
+ * Record who moved a snag into a resolved status, so we can notify them if it
+ * later gets reopened. Automated changes (cron/GitHub sync) run with no current
+ * user and are intentionally skipped, leaving the human resolver intact.
+ *
+ * @param int    $meta_id
+ * @param int    $post_id
+ * @param string $meta_key
+ * @param mixed  $meta_value
+ */
+function matrix_qc_snag_track_resolver($meta_id, $post_id, $meta_key, $meta_value) {
+    if ($meta_key !== '_qc_status' || get_post_type($post_id) !== MATRIX_QC_SNAG_CPT) {
+        return;
+    }
+    $uid = get_current_user_id();
+    if ($uid && matrix_qc_snag_is_resolved_status((string) $meta_value)) {
+        update_post_meta($post_id, '_qc_resolved_by', $uid);
+    }
+}
+add_action('updated_post_meta', 'matrix_qc_snag_track_resolver', 10, 4);
+add_action('added_post_meta', 'matrix_qc_snag_track_resolver', 10, 4);
 
 /**
  * Sanitize free-form meta text while preserving JSON blobs (bbox, revert_payload).

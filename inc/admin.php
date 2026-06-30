@@ -85,6 +85,8 @@ function matrix_qc_snag_status_colors($status) {
         'review_required' => array('fg' => '#5a2ca0', 'bg' => '#f3eefb', 'bd' => '#7c3aed'),
         'in_progress'     => array('fg' => '#0a4b78', 'bg' => '#e7f1f8', 'bd' => '#2271b1'),
         'pr_open'         => array('fg' => '#0a5566', 'bg' => '#e6f4f9', 'bd' => '#007cba'),
+        'pr_merged'       => array('fg' => '#4b2a9c', 'bg' => '#f0eafb', 'bd' => '#8250df'),
+        'ready_for_review' => array('fg' => '#9d174d', 'bg' => '#fce7f0', 'bd' => '#db2777'),
         'fixed'           => array('fg' => '#0a5a2f', 'bg' => '#e8f6ee', 'bd' => '#1d6b3f'),
         'reverted'        => array('fg' => '#7a4100', 'bg' => '#fcf3e6', 'bd' => '#b26200'),
         'non_issue'       => array('fg' => '#50575e', 'bg' => '#f0f0f1', 'bd' => '#8c8f94'),
@@ -157,7 +159,7 @@ function matrix_qc_snag_list_assets() {
 
     echo '<style>';
     echo '.qc-pill{display:inline-block;padding:1px 9px;border-radius:999px;font-size:11px;font-weight:600;line-height:1.7;border:1px solid transparent;white-space:nowrap}';
-    foreach (array('new', 'triaged', 'review_required', 'in_progress', 'pr_open', 'fixed', 'reverted', 'non_issue') as $status) {
+    foreach (array('new', 'triaged', 'review_required', 'in_progress', 'pr_open', 'pr_merged', 'ready_for_review', 'fixed', 'reverted', 'non_issue') as $status) {
         $c = matrix_qc_snag_status_colors($status);
         printf(
             '.wp-list-table tr.qc-row-%1$s td.column-qc_status{box-shadow:inset 4px 0 0 %2$s}.wp-list-table tr.qc-row-%1$s{background:%3$s}',
@@ -166,7 +168,7 @@ function matrix_qc_snag_list_assets() {
             esc_attr($c['bg'] . '80')
         );
     }
-    echo '.wp-list-table tr.qc-row-fixed td.column-title a.row-title,.wp-list-table tr.qc-row-non_issue td.column-title a.row-title{text-decoration:line-through;opacity:.75}';
+    echo '.wp-list-table tr.qc-row-pr_merged td.column-title a.row-title,.wp-list-table tr.qc-row-fixed td.column-title a.row-title,.wp-list-table tr.qc-row-non_issue td.column-title a.row-title{text-decoration:line-through;opacity:.75}';
     echo '</style>';
 
     $csv_url  = wp_nonce_url(admin_url('admin-post.php?action=matrix_qc_export'), 'matrix_qc_export');
@@ -343,6 +345,30 @@ function matrix_qc_snag_render_metabox($post) {
     );
     echo '</td></tr>';
 
+    if (matrix_qc_snag_is_resolved_status($data['status'] !== '' ? $data['status'] : 'new')) {
+        $reopen_url = wp_nonce_url(
+            admin_url('admin-post.php?action=matrix_qc_snag_reopen&snag=' . $post->ID),
+            'matrix_qc_snag_reopen_' . $post->ID
+        );
+        echo '<tr><th>Reopen</th><td>';
+        echo '<a class="button" href="' . esc_url($reopen_url) . '" onclick="return confirm(\'Reopen this snag and notify whoever resolved it?\')">Reopen snag</a> ';
+        echo '<span class="description">Sends it back to Triaged and emails the person who resolved it (or the original reporter).</span>';
+        echo '</td></tr>';
+    }
+
+    echo '<tr><th>Pull request</th><td>';
+    printf(
+        '<input type="url" name="matrix_qc_snag_pr_url" value="%s" class="large-text" placeholder="https://github.com/owner/repo/pull/123" />',
+        esc_attr($data['pr_url'])
+    );
+    echo '<p class="description" style="margin:6px 0 0">Paste a GitHub PR URL (or let the agent fill it in). Save the snag, then sync to pull the live PR state from GitHub - merged PRs flip the status to <strong>Fixed</strong> automatically (a 5-minute cron also keeps it in sync).</p>';
+    $gh_sync_url = wp_nonce_url(
+        admin_url('admin-post.php?action=matrix_qc_agent_github_sync&snag=' . $post->ID),
+        'matrix_qc_agent_dispatch'
+    );
+    echo '<p style="margin:8px 0 0"><a class="button" href="' . esc_url($gh_sync_url) . '">Sync status from GitHub</a></p>';
+    echo '</td></tr>';
+
     if (function_exists('matrix_qc_agent_ready') && matrix_qc_agent_ready()) {
         $dispatch_url = wp_nonce_url(
             admin_url('admin-post.php?action=matrix_qc_agent_dispatch&snag=' . $post->ID),
@@ -507,8 +533,148 @@ function matrix_qc_snag_save_metabox($post_id) {
     if (isset($_POST['matrix_qc_snag_fix_text'])) {
         update_post_meta($post_id, '_qc_fix_text', sanitize_textarea_field(wp_unslash($_POST['matrix_qc_snag_fix_text'])));
     }
+
+    if (isset($_POST['matrix_qc_snag_pr_url'])) {
+        $pr_url = esc_url_raw(wp_unslash($_POST['matrix_qc_snag_pr_url']));
+        update_post_meta($post_id, '_qc_pr_url', $pr_url);
+        // Make sure the background sync runs while a PR is being tracked.
+        if ($pr_url !== '' && function_exists('matrix_qc_agent_ensure_cron')) {
+            matrix_qc_agent_ensure_cron();
+        }
+    }
 }
 add_action('save_post_' . MATRIX_QC_SNAG_CPT, 'matrix_qc_snag_save_metabox');
+
+/**
+ * Add "Set status: …" bulk actions to the snag list table.
+ *
+ * Status lives in post meta (`_qc_status`), so WordPress's native Bulk Edit
+ * can't change it. These actions let you re-status many snags at once.
+ *
+ * @param array<string,string> $actions
+ * @return array<string,string>
+ */
+function matrix_qc_snag_bulk_actions($actions) {
+    $enums = matrix_qc_snag_enums();
+    foreach ($enums['status'] as $status) {
+        $actions['qc_set_' . $status] = 'Set status: ' . matrix_qc_snag_status_label($status);
+    }
+    return $actions;
+}
+add_filter('bulk_actions-edit-' . MATRIX_QC_SNAG_CPT, 'matrix_qc_snag_bulk_actions');
+
+/**
+ * Handle the "Set status: …" bulk actions (nonce is verified by WP core before
+ * this runs). Updates `_qc_status` on each selected snag the user can edit.
+ *
+ * @param string $redirect_to
+ * @param string $doaction
+ * @param int[]  $post_ids
+ * @return string
+ */
+function matrix_qc_snag_handle_bulk_actions($redirect_to, $doaction, $post_ids) {
+    if (strpos($doaction, 'qc_set_') !== 0) {
+        return $redirect_to;
+    }
+
+    $status = substr($doaction, strlen('qc_set_'));
+    $enums  = matrix_qc_snag_enums();
+    if (!in_array($status, $enums['status'], true)) {
+        return $redirect_to;
+    }
+
+    $updated = 0;
+    foreach ($post_ids as $post_id) {
+        $post_id = absint($post_id);
+        if (get_post_type($post_id) !== MATRIX_QC_SNAG_CPT || !current_user_can('edit_post', $post_id)) {
+            continue;
+        }
+        update_post_meta($post_id, '_qc_status', $status);
+        $updated++;
+    }
+
+    return add_query_arg(array(
+        'qc_bulk_status'  => $status,
+        'qc_bulk_updated' => $updated,
+    ), $redirect_to);
+}
+add_filter('handle_bulk_actions-edit-' . MATRIX_QC_SNAG_CPT, 'matrix_qc_snag_handle_bulk_actions', 10, 3);
+
+/**
+ * Show a success notice after a bulk status change.
+ */
+function matrix_qc_snag_bulk_admin_notice() {
+    if (!isset($_REQUEST['qc_bulk_updated'])) {
+        return;
+    }
+    $screen = get_current_screen();
+    if (!$screen || $screen->id !== 'edit-' . MATRIX_QC_SNAG_CPT) {
+        return;
+    }
+
+    $count = absint($_REQUEST['qc_bulk_updated']);
+    $label = matrix_qc_snag_status_label(
+        isset($_REQUEST['qc_bulk_status']) ? sanitize_text_field(wp_unslash($_REQUEST['qc_bulk_status'])) : ''
+    );
+    printf(
+        '<div class="notice notice-success is-dismissible"><p>%s</p></div>',
+        esc_html(sprintf(
+            _n('%1$d snag set to “%2$s”.', '%1$d snags set to “%2$s”.', $count, 'matrix-qc-snag'),
+            $count,
+            $label
+        ))
+    );
+}
+add_action('admin_notices', 'matrix_qc_snag_bulk_admin_notice');
+
+/**
+ * Add a "Reopen" row action for resolved snags on the list table.
+ *
+ * @param array<string,string> $actions
+ * @param WP_Post              $post
+ * @return array<string,string>
+ */
+function matrix_qc_snag_reopen_row_action($actions, $post) {
+    if ($post->post_type !== MATRIX_QC_SNAG_CPT || !current_user_can('edit_post', $post->ID)) {
+        return $actions;
+    }
+    $status = (string) get_post_meta($post->ID, '_qc_status', true);
+    if (!matrix_qc_snag_is_resolved_status($status)) {
+        return $actions;
+    }
+    $url = wp_nonce_url(
+        admin_url('admin-post.php?action=matrix_qc_snag_reopen&snag=' . $post->ID),
+        'matrix_qc_snag_reopen_' . $post->ID
+    );
+    $actions['matrix_qc_reopen'] = '<a href="' . esc_url($url) . '">Reopen</a>';
+    return $actions;
+}
+add_filter('post_row_actions', 'matrix_qc_snag_reopen_row_action', 10, 2);
+
+/**
+ * admin-post: reopen a single snag and notify its resolver.
+ */
+function matrix_qc_snag_handle_reopen() {
+    $id = isset($_GET['snag']) ? absint($_GET['snag']) : 0;
+    if (!$id || !current_user_can('edit_post', $id)) {
+        wp_die('Forbidden');
+    }
+    check_admin_referer('matrix_qc_snag_reopen_' . $id);
+
+    $res     = matrix_qc_snag_reopen($id, wp_get_current_user());
+    $message = is_wp_error($res)
+        ? 'Reopen failed: ' . $res->get_error_message()
+        : 'Snag reopened and sent back to Triaged. The resolver has been notified.';
+
+    $dest = wp_get_referer();
+    if (!$dest) {
+        $dest = get_edit_post_link($id, 'url');
+    }
+    set_transient('matrix_qc_agent_notice_' . get_current_user_id(), $message, 60);
+    wp_safe_redirect($dest ? $dest : admin_url());
+    exit;
+}
+add_action('admin_post_matrix_qc_snag_reopen', 'matrix_qc_snag_handle_reopen');
 
 /**
  * Figma map tools submenu.
@@ -551,7 +717,7 @@ function matrix_qc_snag_severity_weight($severity) {
  * @return bool
  */
 function matrix_qc_snag_is_open($status) {
-    return !in_array($status, array('fixed', 'reverted', 'non_issue'), true);
+    return !in_array($status, array('pr_merged', 'fixed', 'reverted', 'non_issue'), true);
 }
 
 /**
@@ -877,6 +1043,7 @@ function matrix_qc_snag_dashboard_page() {
     echo '<div style="display:flex;gap:12px;flex-wrap:wrap;margin:16px 0">';
     matrix_qc_snag_stat_card('Total snags', $totals['total']);
     matrix_qc_snag_stat_card('Open', $totals['open']);
+    matrix_qc_snag_stat_card('Ready for review', $totals['status']['ready_for_review']);
     matrix_qc_snag_stat_card('Fixed', $totals['status']['fixed']);
     matrix_qc_snag_stat_card('High severity', $totals['severity']['high']);
     echo '</div>';
@@ -908,6 +1075,37 @@ function matrix_qc_snag_dashboard_page() {
         );
     }
     echo '</tbody></table>';
+
+    // Ready for human review: merged fixes awaiting sign-off.
+    $ready = array_filter($snags, static function ($s) {
+        return ($s['status'] !== '' ? $s['status'] : 'new') === 'ready_for_review';
+    });
+    usort($ready, 'matrix_qc_snag_priority_cmp');
+    if (!empty($ready)) {
+        echo '<h2 style="margin-top:28px">Ready for human review (' . count($ready) . ')</h2>';
+        echo '<p class="description">Fixes merged on GitHub. Open each on its page, confirm it, then mark it Fixed.</p>';
+        echo '<table class="widefat striped"><thead><tr>';
+        echo '<th>Snag</th><th>Page</th><th>Merged PR</th><th>Actions</th></tr></thead><tbody>';
+        foreach ($ready as $s) {
+            $edit = get_edit_post_link($s['id']);
+            $deep = $s['page_url'] ? add_query_arg('qc_snag', (int) $s['id'], $s['page_url']) : '';
+            printf(
+                '<tr>'
+                . '<td><a href="%s">%s</a></td>'
+                . '<td><code>%s</code></td>'
+                . '<td>%s</td>'
+                . '<td>%s<a class="button button-small" href="%s">Edit / mark fixed</a></td>'
+                . '</tr>',
+                esc_url($edit),
+                esc_html($s['description'] !== '' ? wp_trim_words($s['description'], 12, '...') : $s['title']),
+                esc_html($s['page_path']),
+                $s['pr_url'] ? '<a href="' . esc_url($s['pr_url']) . '" target="_blank">PR</a>' : '&mdash;',
+                $deep ? '<a class="button button-small button-primary" href="' . esc_url($deep) . '" target="_blank" style="margin-right:6px">Review on page</a>' : '',
+                esc_url($edit)
+            );
+        }
+        echo '</tbody></table>';
+    }
 
     // Prioritised list.
     echo '<h2 style="margin-top:28px">Priority queue (open snags)</h2>';
